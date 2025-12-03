@@ -42,6 +42,7 @@ const App: React.FC = () => {
   });
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null); // Ref for direct container scrolling
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const liveCleanupRef = useRef<{ disconnect: () => void; toggleMute: (mute: boolean) => void; sendVideoFrame: (data: string) => void } | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -60,14 +61,48 @@ const App: React.FC = () => {
     if (loadedSessions.length > 0) setCurrentSessionId(loadedSessions[0].id);
   }, []);
 
+  // Initialize User Data on Login with Persistence Check
   const handleLogin = (loggedInUser: User) => {
-      const completeUser = { ...loggedInUser, joinedDate: Date.now(), region: 'Asia', dob: '' };
+      // 1. Try to fetch extended profile data from LocalStorage
+      let storedProfile: Partial<User> = {};
+      try {
+          const storedData = localStorage.getItem(`burnit_user_profile_${loggedInUser.uid}`);
+          if (storedData) {
+              storedProfile = JSON.parse(storedData);
+          }
+      } catch (e) { console.error("Failed to load profile", e); }
+
+      // 2. Merge logged in data with stored data
+      const completeUser = { 
+          ...loggedInUser, 
+          joinedDate: storedProfile.joinedDate || Date.now(), 
+          region: storedProfile.region || 'Asia', 
+          dob: storedProfile.dob || '',
+          displayName: storedProfile.displayName || loggedInUser.displayName,
+          photoURL: storedProfile.photoURL || loggedInUser.photoURL
+      };
+
       setUser(completeUser);
-      setProfileForm({ displayName: completeUser.displayName || '', region: completeUser.region || 'Asia', dob: completeUser.dob || '' });
+      setProfileForm({ 
+          displayName: completeUser.displayName || '', 
+          region: completeUser.region || 'Asia', 
+          dob: completeUser.dob || '' 
+      });
   };
 
   useEffect(() => { if (sessions.length > 0) localStorage.setItem('burnit_sessions', JSON.stringify(sessions)); }, [sessions]);
-  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  
+  // Robust Scrolling Logic
+  useEffect(() => { 
+      if (chatContainerRef.current) {
+          const { scrollHeight, clientHeight } = chatContainerRef.current;
+          chatContainerRef.current.scrollTo({
+              top: scrollHeight - clientHeight,
+              behavior: 'smooth'
+          });
+      }
+  }, [messages, isLoading]); // Trigger on messages or loading state change
+
   useEffect(() => { document.documentElement.classList.toggle('dark', theme === 'dark'); }, [theme]);
 
   useEffect(() => {
@@ -197,8 +232,24 @@ const App: React.FC = () => {
 
   const handleUpdateProfile = () => {
       if (user) {
-          setUser({ ...user, displayName: profileForm.displayName, region: profileForm.region, dob: profileForm.dob });
-          alert("Profile Updated Successfully!");
+          const updatedUser = { ...user, displayName: profileForm.displayName, region: profileForm.region, dob: profileForm.dob };
+          setUser(updatedUser);
+          
+          // Save persistence data
+          try {
+             const dataToSave = {
+                 displayName: updatedUser.displayName,
+                 region: updatedUser.region,
+                 dob: updatedUser.dob,
+                 photoURL: updatedUser.photoURL,
+                 joinedDate: updatedUser.joinedDate
+             };
+             localStorage.setItem(`burnit_user_profile_${user.uid}`, JSON.stringify(dataToSave));
+             alert("Profile Updated Successfully!");
+          } catch(e) {
+             console.error("Save failed", e);
+             alert("Profile Updated (Local Session Only) - Storage Full?");
+          }
       }
   };
 
@@ -482,7 +533,8 @@ const App: React.FC = () => {
               </select>
             </div>
           </header>
-          <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6 scroll-smooth min-h-0">
+          {/* Main Chat Container - Updated for Layout Stability */}
+          <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6 scroll-smooth min-h-0">
             {messages.length === 0 && (
                <div className="h-full flex flex-col items-center justify-center opacity-40">
                    <div className="relative"><img src={BURNIT_LOGO_URL} className="w-24 h-24 rounded-full border border-gray-300 dark:border-white/20 mb-4 grayscale" onError={(e) => e.currentTarget.src = PLACEHOLDER_AVATAR} /></div>
@@ -495,7 +547,7 @@ const App: React.FC = () => {
                 <div className={`max-w-[85%] md:max-w-[70%] p-4 rounded-2xl ${msg.role === 'user' ? 'bg-white text-black rounded-tr-none shadow-md' : 'bg-white/80 dark:bg-white/5 border-l-4 border-l-burnit-cyan text-black dark:text-gray-100 rounded-tl-none shadow-sm'}`}>
                   {msg.image && msg.type !== 'image_generated' && <div className="mb-2"><img src={msg.image} className="max-h-60 rounded-lg border border-gray-200 dark:border-white/10" alt="Attachment" /></div>}
                   {msg.type === 'image_generated' && msg.image ? <div className="space-y-3"><img src={msg.image} alt="Generated" className="rounded-xl w-full" /><p>{msg.text}</p></div> : 
-                    <div className="leading-relaxed">
+                    <div className="leading-relaxed overflow-x-auto max-w-full">
                         <ReactMarkdown className="prose dark:prose-invert max-w-none break-words" remarkPlugins={[remarkMath, remarkGfm]} rehypePlugins={[rehypeKatex]}>{msg.text}</ReactMarkdown>
                     </div>
                   }
@@ -512,6 +564,7 @@ const App: React.FC = () => {
                  </div>
               </div>
             )}
+            {/* messagesEndRef is kept for legacy ref usage if needed, but scrolling is handled via chatContainerRef */}
             <div ref={messagesEndRef} />
           </div>
           <div className="shrink-0 p-4 md:p-6 bg-gradient-to-t from-gray-100 via-gray-100/80 to-transparent dark:from-black dark:via-black/80 dark:to-transparent">
