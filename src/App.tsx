@@ -210,6 +210,21 @@ const App: React.FC = () => {
           reader.readAsDataURL(file);
       }
   };
+  
+  const handleClearHistory = () => {
+      if (window.confirm("Are you sure you want to delete all chat history? This cannot be undone.")) {
+          const newSession: ChatSession = {
+              id: Date.now().toString(),
+              title: 'New Chat',
+              messages: [],
+              lastUpdated: Date.now()
+          };
+          setSessions([newSession]);
+          setCurrentSessionId(newSession.id);
+          localStorage.removeItem('burnit_sessions');
+          alert("Cleared Chat History!");
+      }
+  };
 
   const renderUniqueAiVisual = (sizeClass: string = "w-32 h-32") => (
       <div className={`relative flex items-center justify-center p-8 ${sizeClass}`}>
@@ -286,16 +301,78 @@ const App: React.FC = () => {
               </div>
               <div className="flex-1 overflow-y-auto p-4 md:p-10 pb-24 min-h-0">
                 <div className="max-w-2xl space-y-6 mx-auto">
+                    {/* Account Details */}
                     <div className="bg-white dark:bg-[#111] p-6 rounded-2xl border border-gray-200 dark:border-white/10 shadow-lg">
                         <h3 className="text-xl font-semibold mb-4 text-burnit-cyan">Account Details</h3>
                         <div className="space-y-3 text-gray-600 dark:text-gray-300">
                             <div className="flex justify-between border-b border-gray-100 dark:border-white/5 pb-2"><span>Joined Date</span><span>{new Date(user.joinedDate || Date.now()).toLocaleDateString()}</span></div>
+                            <div className="flex justify-between border-b border-gray-100 dark:border-white/5 pb-2"><span>Born Date</span><span>{user.dob || 'Not set'}</span></div>
                             <div className="flex justify-between border-b border-gray-100 dark:border-white/5 pb-2"><span>Name</span><span>{user.displayName}</span></div>
                             <div className="flex justify-between border-b border-gray-100 dark:border-white/5 pb-2"><span>Email</span><span>{user.email || 'N/A'}</span></div>
                         </div>
                     </div>
+                    
+                    {/* Preferences */}
+                    <div className="bg-white dark:bg-[#111] p-6 rounded-2xl border border-gray-200 dark:border-white/10 shadow-lg">
+                        <h3 className="text-xl font-semibold mb-4 text-black dark:text-white">Preferences</h3>
+                        <div className="flex items-center justify-between mb-6">
+                            <div className="flex items-center gap-3 text-black dark:text-white">
+                                {theme === 'dark' ? <Moon className="text-purple-400" /> : <Sun className="text-yellow-500" />}
+                                <span>App Theme</span>
+                            </div>
+                            <button 
+                                onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+                                className="px-4 py-2 bg-gray-100 dark:bg-white/10 rounded-lg hover:bg-gray-200 dark:hover:bg-white/20 transition-all text-sm text-black dark:text-white"
+                            >
+                                {theme === 'dark' ? 'Switch to Light' : 'Switch to Dark'}
+                            </button>
+                        </div>
+                        
+                        <div className="flex items-center justify-between mb-6">
+                            <div className="flex items-center gap-3 text-black dark:text-white">
+                                <Globe className="text-blue-500" />
+                                <span>Language</span>
+                            </div>
+                            <select 
+                                value={language} 
+                                onChange={(e) => setLanguage(e.target.value)}
+                                className="bg-gray-100 dark:bg-white/10 border border-gray-200 dark:border-white/10 rounded-lg px-3 py-2 text-sm outline-none focus:border-burnit-cyan text-black dark:text-white appearance-none"
+                            >
+                                {SUPPORTED_LANGUAGES.map(l => (
+                                    <option key={l.code} value={l.name} className="bg-white dark:bg-black text-black dark:text-white">{l.name}</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        <div className="space-y-3">
+                            <div className="flex items-center gap-2 mb-2">
+                                <Key className="w-4 h-4 text-gray-400"/>
+                                <label className="text-sm font-medium text-gray-400">Aree Ai Configurations</label>
+                            </div>
+                            <div className="flex items-center gap-2 text-green-600 dark:text-green-400 bg-green-100 dark:bg-green-400/10 p-3 rounded-xl border border-green-200 dark:border-green-400/20">
+                                <span className="w-2 h-2 bg-green-500 dark:bg-green-400 rounded-full animate-pulse"></span>
+                                <span className="text-sm font-medium">Auto Aree Ai Connected</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Danger Zone */}
                     <div className="bg-red-50 dark:bg-red-900/10 p-6 rounded-2xl border border-red-200 dark:border-red-500/20 shadow-lg space-y-4">
-                        <h3 className="text-xl font-semibold mb-2 text-red-600 dark:text-red-400 flex items-center gap-2">Danger Zone</h3>
+                        <h3 className="text-xl font-semibold mb-2 text-red-600 dark:text-red-400 flex items-center gap-2">
+                             <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
+                             Danger Zone
+                        </h3>
+                        <button 
+                            onClick={handleClearHistory}
+                            className="w-full flex justify-between items-center p-3 rounded-lg bg-white dark:bg-black/20 hover:bg-red-100 dark:hover:bg-red-500/10 text-gray-600 dark:text-gray-300 transition-colors border border-transparent hover:border-red-200 dark:hover:border-red-500/30"
+                        >
+                            <span>Clear Chat History</span>
+                            <span className="text-xs bg-red-100 dark:bg-red-500/20 text-red-600 dark:text-red-400 px-2 py-1 rounded font-bold">CLEAR</span>
+                        </button>
+                        <button className="w-full flex justify-between items-center p-3 rounded-lg bg-white dark:bg-black/20 hover:bg-red-100 dark:hover:bg-red-500/10 text-gray-600 dark:text-gray-300 transition-colors border border-transparent hover:border-red-200 dark:hover:border-red-500/30">
+                            <span>Delete Account</span>
+                            <span className="text-xs bg-red-100 dark:bg-red-500/20 text-red-600 dark:text-red-400 px-2 py-1 rounded font-bold">SOON</span>
+                        </button>
                         <button onClick={() => { setUser(null); }} className="w-full flex items-center justify-center gap-3 p-3 rounded-lg bg-red-600 hover:bg-red-700 text-white font-bold transition-all shadow-md hover:shadow-red-500/30 mt-2">
                             <LogOut size={18} /> Sign Out
                         </button>
@@ -320,6 +397,38 @@ const App: React.FC = () => {
                     </div>
                     <div className="space-y-6">
                         <div><label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Display Name</label><input type="text" value={profileForm.displayName} onChange={(e) => setProfileForm({...profileForm, displayName: e.target.value})} className="w-full bg-gray-50 dark:bg-black/50 border border-gray-200 dark:border-white/10 rounded-xl p-3 text-black dark:text-white focus:border-burnit-cyan outline-none" /></div>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Region</label>
+                                <div className="relative">
+                                    <Globe className="absolute left-3 top-3.5 text-gray-400 w-5 h-5" />
+                                    <select
+                                        value={profileForm.region}
+                                        onChange={(e) => setProfileForm({...profileForm, region: e.target.value})}
+                                        className="w-full bg-gray-50 dark:bg-black/50 border border-gray-200 dark:border-white/10 rounded-xl p-3 pl-10 text-black dark:text-white focus:border-burnit-cyan outline-none appearance-none"
+                                    >
+                                        <option value="" disabled>Select Region</option>
+                                        {CONTINENTS.map(c => (
+                                            <option key={c} value={c} className="bg-white dark:bg-black text-black dark:text-white">{c}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Date of Birth</label>
+                                <div className="relative">
+                                    <Calendar className="absolute left-3 top-3.5 text-gray-400 w-5 h-5" />
+                                    <input 
+                                        type="date" 
+                                        value={profileForm.dob} 
+                                        onChange={(e) => setProfileForm({...profileForm, dob: e.target.value})}
+                                        className="w-full bg-gray-50 dark:bg-black/50 border border-gray-200 dark:border-white/10 rounded-xl p-3 pl-10 text-black dark:text-white focus:border-burnit-cyan outline-none" 
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
                         <button onClick={handleUpdateProfile} className="w-full bg-gradient-to-r from-burnit-cyan to-blue-600 text-black font-bold py-3 rounded-xl hover:opacity-90 transition-opacity mt-4">Save Changes</button>
                     </div>
                 </div>
