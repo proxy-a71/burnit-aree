@@ -17,6 +17,7 @@ export interface ChatMessage {
   timestamp: number;
   image?: string;
   type: 'text' | 'image_generated';
+  groundingMetadata?: any; // New: For Search Results/Citations
 }
 
 export interface ChatSession {

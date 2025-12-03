@@ -6,7 +6,7 @@ import { geminiService } from './services/geminiService';
 import { 
   Flame, MessageSquare, Mic, Image as ImageIcon, 
   Send, Paperclip, Settings, LogOut, Moon, Sun, X, MicOff,
-  User as UserIcon, Calendar, MapPin, Camera, Video, ChevronLeft, ChevronRight, Upload, PhoneOff, VideoOff, Play, Key, Globe, File as FileIcon, Plus, MessageCircle, Menu, Aperture, Activity, Hexagon, Sparkles
+  User as UserIcon, Calendar, MapPin, Camera, Video, ChevronLeft, ChevronRight, Upload, PhoneOff, VideoOff, Play, Key, Globe, File as FileIcon, Plus, MessageCircle, Menu, Aperture, Activity, Hexagon, Sparkles, FileText, Link as LinkIcon
 } from 'lucide-react';
 import { PLACEHOLDER_AVATAR, BURNIT_LOGO_URL } from './constants';
 import ReactMarkdown from 'react-markdown';
@@ -30,6 +30,8 @@ const App: React.FC = () => {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isLiveConnected, setIsLiveConnected] = useState(false);
+  const [isAiSpeaking, setIsAiSpeaking] = useState(false);
+
   const [language, setLanguage] = useState('English');
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
   const [isVideoEnabled, setIsVideoEnabled] = useState(false);
@@ -41,9 +43,13 @@ const App: React.FC = () => {
       dob: '',
   });
 
+  // New State for Attachment
+  const [attachment, setAttachment] = useState<{ file: File; preview: string; type: 'image' | 'pdf' } | null>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const chatContainerRef = useRef<HTMLDivElement>(null); // Ref for direct container scrolling
+  const chatContainerRef = useRef<HTMLDivElement>(null);
   const avatarInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const liveCleanupRef = useRef<{ disconnect: () => void; toggleMute: (mute: boolean) => void; sendVideoFrame: (data: string) => void } | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const videoIntervalRef = useRef<number | null>(null);
@@ -61,9 +67,7 @@ const App: React.FC = () => {
     if (loadedSessions.length > 0) setCurrentSessionId(loadedSessions[0].id);
   }, []);
 
-  // Initialize User Data on Login with Persistence Check
   const handleLogin = (loggedInUser: User) => {
-      // 1. Try to fetch extended profile data from LocalStorage
       let storedProfile: Partial<User> = {};
       try {
           const storedData = localStorage.getItem(`burnit_user_profile_${loggedInUser.uid}`);
@@ -72,7 +76,6 @@ const App: React.FC = () => {
           }
       } catch (e) { console.error("Failed to load profile", e); }
 
-      // 2. Merge logged in data with stored data
       const completeUser = { 
           ...loggedInUser, 
           joinedDate: storedProfile.joinedDate || Date.now(), 
@@ -92,7 +95,6 @@ const App: React.FC = () => {
 
   useEffect(() => { if (sessions.length > 0) localStorage.setItem('burnit_sessions', JSON.stringify(sessions)); }, [sessions]);
   
-  // Robust Scrolling Logic
   useEffect(() => { 
       if (chatContainerRef.current) {
           const { scrollHeight, clientHeight } = chatContainerRef.current;
@@ -101,7 +103,7 @@ const App: React.FC = () => {
               behavior: 'smooth'
           });
       }
-  }, [messages, isLoading]); // Trigger on messages or loading state change
+  }, [messages, isLoading]);
 
   useEffect(() => { document.documentElement.classList.toggle('dark', theme === 'dark'); }, [theme]);
 
@@ -143,12 +145,14 @@ const App: React.FC = () => {
       setCurrentSessionId(newSession.id);
       setMode(AppMode.CHAT);
       setIsSidebarOpen(false); 
+      setAttachment(null);
   };
 
   const switchSession = (sessionId: string) => {
       setCurrentSessionId(sessionId);
       setMode(AppMode.CHAT);
       setIsSidebarOpen(false); 
+      setAttachment(null);
   };
 
   const updateCurrentSession = (newMessages: ChatMessage[]) => {
@@ -165,12 +169,53 @@ const App: React.FC = () => {
       }));
   };
 
+  // --- File Handling ---
+
+  const handleFileClick = () => {
+      fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (file) {
+          const isPdf = file.type === 'application/pdf';
+          const reader = new FileReader();
+          reader.onloadend = () => {
+              setAttachment({
+                  file: file,
+                  preview: reader.result as string,
+                  type: isPdf ? 'pdf' : 'image'
+              });
+          };
+          reader.readAsDataURL(file);
+      }
+  };
+
   const handleSendMessage = async () => {
-    if (!input.trim() || isLoading) return;
-    const newMessage: ChatMessage = { id: Date.now().toString(), role: 'user', text: input, timestamp: Date.now(), type: 'text' };
+    if ((!input.trim() && !attachment) || isLoading) return;
+    
+    // Prepare attachment for sending
+    let attachData = null;
+    if (attachment) {
+        attachData = {
+            mimeType: attachment.file.type,
+            data: attachment.preview.split(',')[1] // clean base64
+        };
+    }
+
+    const newMessage: ChatMessage = { 
+        id: Date.now().toString(), 
+        role: 'user', 
+        text: input, 
+        timestamp: Date.now(), 
+        type: 'text',
+        image: attachment ? attachment.preview : undefined 
+    };
+
     const updatedMessages = [...messages, newMessage];
     updateCurrentSession(updatedMessages);
     setInput('');
+    setAttachment(null);
     setIsLoading(true);
 
     try {
@@ -182,16 +227,22 @@ const App: React.FC = () => {
         }
       } else {
         const historyForApi = updatedMessages.map(m => ({ role: m.role, parts: [{ text: m.text }] }));
-        const responseText = await geminiService.sendMessage(historyForApi, newMessage.text, null, language);
-        const botMsg: ChatMessage = { id: (Date.now() + 1).toString(), role: 'model', text: responseText || "No response received.", timestamp: Date.now(), type: 'text' };
+        // Call updated sendMessage which returns text AND metadata
+        const response = await geminiService.sendMessage(historyForApi, newMessage.text, attachData, language);
+        
+        const botMsg: ChatMessage = { 
+            id: (Date.now() + 1).toString(), 
+            role: 'model', 
+            text: response.text || "No response received.", 
+            timestamp: Date.now(), 
+            type: 'text',
+            groundingMetadata: response.groundingMetadata // Save search citations
+        };
         updateCurrentSession([...updatedMessages, botMsg]);
       }
     } catch (error: any) {
       console.error(error);
-      const errorText = error.message?.includes('403') || error.message?.includes('key') 
-          ? "⚠️ API Key Error: The provided API Key is invalid or has leaked. Please check your environment variables." 
-          : "⚠️ Connection Error: Failed to connect to Burnit AI.";
-          
+      const errorText = "⚠️ Error: Failed to process request.";
       const errorMsg: ChatMessage = { id: (Date.now() + 1).toString(), role: 'model', text: errorText, timestamp: Date.now(), type: 'text' };
       updateCurrentSession([...updatedMessages, errorMsg]);
     } finally {
@@ -206,7 +257,11 @@ const App: React.FC = () => {
             (buffer) => {}, 
             () => {
                 setIsLiveConnected(false); setIsVideoEnabled(false); setIsMicMuted(false);
+                setIsAiSpeaking(false);
                 if (videoIntervalRef.current) clearInterval(videoIntervalRef.current);
+            },
+            (speaking) => {
+                setIsAiSpeaking(speaking);
             }
         );
         liveCleanupRef.current = controls;
@@ -219,7 +274,7 @@ const App: React.FC = () => {
 
   const endLiveSession = () => {
       if (liveCleanupRef.current) { liveCleanupRef.current.disconnect(); liveCleanupRef.current = null; }
-      setIsLiveConnected(false); setIsVideoEnabled(false); setIsMicMuted(false);
+      setIsLiveConnected(false); setIsVideoEnabled(false); setIsMicMuted(false); setIsAiSpeaking(false);
   };
 
   const toggleMic = () => {
@@ -235,7 +290,6 @@ const App: React.FC = () => {
           const updatedUser = { ...user, displayName: profileForm.displayName, region: profileForm.region, dob: profileForm.dob };
           setUser(updatedUser);
           
-          // Save persistence data
           try {
              const dataToSave = {
                  displayName: updatedUser.displayName,
@@ -292,6 +346,36 @@ const App: React.FC = () => {
       </div>
   );
 
+  const renderTalkingAvatar = () => (
+    <div className="relative flex flex-col items-center justify-center w-full h-full">
+         <div className="relative w-48 h-48 md:w-64 md:h-64 flex items-center justify-center">
+            <div className={`absolute inset-0 border-2 border-burnit-cyan/30 rounded-full ${isAiSpeaking ? 'animate-spin' : 'animate-spin-slow'} duration-[10s]`}></div>
+            <div className="absolute inset-4 border border-burnit-red/30 rounded-full animate-pulse"></div>
+            
+            <div className="relative z-10 w-32 h-32 md:w-40 md:h-40 bg-black rounded-full border-2 border-burnit-cyan flex flex-col items-center justify-center overflow-hidden shadow-[0_0_30px_rgba(0,240,255,0.5)]">
+                 <img src={BURNIT_LOGO_URL} className="absolute inset-0 w-full h-full object-cover opacity-60 mix-blend-screen" />
+                 
+                 <div className="z-20 flex flex-col items-center gap-4 translate-y-2">
+                     <div className="flex gap-8">
+                         <div className={`w-3 h-1 bg-burnit-cyan shadow-[0_0_10px_#00f0ff] ${isAiSpeaking ? 'h-2' : 'h-1'} transition-all duration-100`}></div>
+                         <div className={`w-3 h-1 bg-burnit-cyan shadow-[0_0_10px_#00f0ff] ${isAiSpeaking ? 'h-2' : 'h-1'} transition-all duration-100`}></div>
+                     </div>
+                     <div className="flex items-center gap-1 h-8 items-center justify-center">
+                        <div className={`w-1 bg-burnit-red rounded-full transition-all duration-75 ${isAiSpeaking ? 'h-6 animate-pulse' : 'h-1'}`}></div>
+                        <div className={`w-1 bg-burnit-red rounded-full transition-all duration-75 delay-75 ${isAiSpeaking ? 'h-8 animate-pulse' : 'h-1'}`}></div>
+                        <div className={`w-1 bg-burnit-red rounded-full transition-all duration-75 delay-100 ${isAiSpeaking ? 'h-4 animate-pulse' : 'h-1'}`}></div>
+                        <div className={`w-1 bg-burnit-red rounded-full transition-all duration-75 delay-75 ${isAiSpeaking ? 'h-8 animate-pulse' : 'h-1'}`}></div>
+                        <div className={`w-1 bg-burnit-red rounded-full transition-all duration-75 ${isAiSpeaking ? 'h-6 animate-pulse' : 'h-1'}`}></div>
+                     </div>
+                 </div>
+            </div>
+         </div>
+         <div className={`mt-6 text-sm font-bold tracking-[0.2em] ${isAiSpeaking ? 'text-burnit-cyan animate-pulse' : 'text-gray-500'}`}>
+            {isAiSpeaking ? "VOICE TRANSMISSION ACTIVE" : "AWAITING INPUT..."}
+         </div>
+    </div>
+  );
+
   if (!user) return <Auth onLogin={handleLogin} />;
 
   return (
@@ -303,7 +387,7 @@ const App: React.FC = () => {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
                <img src={BURNIT_LOGO_URL} alt="Logo" className="w-10 h-10 rounded-full animate-flame border-2 border-burnit-cyan object-cover" onError={(e) => e.currentTarget.src = PLACEHOLDER_AVATAR} />
-               <span className="font-display font-bold text-2xl tracking-wide bg-gradient-to-r from-burnit-cyan to-burnit-red bg-clip-text text-transparent">Burnit</span>
+               <span className="font-display font-bold text-2xl tracking-wide bg-gradient-to-r from-burnit-cyan to-burnit-red bg-clip-text text-transparent">Burnit AI</span>
             </div>
             <button className="md:hidden text-gray-500 hover:text-white" onClick={() => setIsSidebarOpen(false)}><X size={28} /></button>
           </div>
@@ -431,60 +515,6 @@ const App: React.FC = () => {
                 </div>
               </div>
           </div>
-      ) : mode === AppMode.PROFILE ? (
-          <div className="flex-1 flex flex-col h-full bg-white/50 dark:bg-black/50 overflow-hidden relative z-10">
-              <div className="h-16 shrink-0 flex items-center px-4 border-b border-gray-200 dark:border-white/10 bg-white/80 dark:bg-black/20 backdrop-blur-md z-40 gap-4">
-                   <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 text-black dark:text-white"><Menu size={24} /></button>
-                   <h2 className="text-xl font-display font-bold text-black dark:text-white">Edit Profile</h2>
-              </div>
-              <div className="flex-1 overflow-y-auto p-4 md:p-10 pb-24 min-h-0">
-                <div className="max-w-2xl bg-white dark:bg-[#111] p-6 md:p-8 rounded-2xl border border-gray-200 dark:border-white/10 shadow-xl mx-auto">
-                    <div className="flex flex-col items-center mb-8">
-                        <div className="relative group cursor-pointer" onClick={() => avatarInputRef.current?.click()}>
-                            <img src={user.photoURL || PLACEHOLDER_AVATAR} alt="Avatar" className="w-32 h-32 rounded-full object-cover border-4 border-burnit-cyan group-hover:opacity-75 transition-opacity" />
-                            <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"><Camera className="text-white w-8 h-8 drop-shadow-lg" /></div>
-                        </div>
-                        <input type="file" ref={avatarInputRef} onChange={handleAvatarChange} accept="image/*" className="hidden" />
-                    </div>
-                    <div className="space-y-6">
-                        <div><label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Display Name</label><input type="text" value={profileForm.displayName} onChange={(e) => setProfileForm({...profileForm, displayName: e.target.value})} className="w-full bg-gray-50 dark:bg-black/50 border border-gray-200 dark:border-white/10 rounded-xl p-3 text-black dark:text-white focus:border-burnit-cyan outline-none" /></div>
-                        
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <div>
-                                <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Region</label>
-                                <div className="relative">
-                                    <Globe className="absolute left-3 top-3.5 text-gray-400 w-5 h-5" />
-                                    <select
-                                        value={profileForm.region}
-                                        onChange={(e) => setProfileForm({...profileForm, region: e.target.value})}
-                                        className="w-full bg-gray-50 dark:bg-black/50 border border-gray-200 dark:border-white/10 rounded-xl p-3 pl-10 text-black dark:text-white focus:border-burnit-cyan outline-none appearance-none"
-                                    >
-                                        <option value="" disabled>Select Region</option>
-                                        {CONTINENTS.map(c => (
-                                            <option key={c} value={c} className="bg-white dark:bg-black text-black dark:text-white">{c}</option>
-                                        ))}
-                                    </select>
-                                </div>
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Date of Birth</label>
-                                <div className="relative">
-                                    <Calendar className="absolute left-3 top-3.5 text-gray-400 w-5 h-5" />
-                                    <input 
-                                        type="date" 
-                                        value={profileForm.dob} 
-                                        onChange={(e) => setProfileForm({...profileForm, dob: e.target.value})}
-                                        className="w-full bg-gray-50 dark:bg-black/50 border border-gray-200 dark:border-white/10 rounded-xl p-3 pl-10 text-black dark:text-white focus:border-burnit-cyan outline-none" 
-                                    />
-                                </div>
-                            </div>
-                        </div>
-
-                        <button onClick={handleUpdateProfile} className="w-full bg-gradient-to-r from-burnit-cyan to-blue-600 text-black font-bold py-3 rounded-xl hover:opacity-90 transition-opacity mt-4">Save Changes</button>
-                    </div>
-                </div>
-              </div>
-          </div>
       ) : mode === AppMode.LIVE ? (
           isLiveConnected ? (
              <div className="flex-1 flex flex-col h-full bg-gray-900 dark:bg-[#0a0a0a] p-2 md:p-4 gap-4 overflow-hidden relative">
@@ -492,10 +522,17 @@ const App: React.FC = () => {
                 <div className="flex-1 flex flex-col md:flex-row gap-4 h-full overflow-hidden">
                     <div className="flex-1 bg-black rounded-2xl border border-white/10 relative overflow-hidden flex flex-col items-center justify-center min-h-[40%]">
                         <div className="absolute top-4 right-4 bg-black/60 px-3 py-1 rounded-full text-xs font-bold text-burnit-cyan border border-burnit-cyan/20 flex items-center gap-2 z-20"><div className="w-2 h-2 bg-burnit-cyan rounded-full animate-pulse"></div>BURNIT AI (HOST)</div>
-                        <div className="relative flex flex-col items-center justify-center w-full h-full">{renderUniqueAiVisual("w-48 h-48 md:w-64 md:h-64")}</div>
+                        {renderTalkingAvatar()}
                     </div>
                     <div className="flex-1 bg-gray-800 dark:bg-[#111] rounded-2xl border border-white/10 relative overflow-hidden flex flex-col items-center justify-center group min-h-[40%]">
                         <div className="absolute top-4 right-4 bg-black/60 px-3 py-1 rounded-full text-xs font-bold text-white border border-white/10 z-20">YOU</div>
+                        {isMicMuted && (
+                          <div className="absolute top-4 left-4 z-30 pointer-events-none">
+                             <div className="bg-black/60 p-3 rounded-full backdrop-blur-md border border-red-500/50 animate-pulse">
+                                <MicOff className="w-6 h-6 text-red-500" />
+                             </div>
+                          </div>
+                        )}
                         {isVideoEnabled ? <video ref={videoRef} autoPlay muted playsInline className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1]" /> : <div className="flex flex-col items-center gap-4"><img src={user.photoURL || PLACEHOLDER_AVATAR} className="w-24 h-24 md:w-32 md:h-32 rounded-full border-4 border-gray-600 dark:border-gray-700 opacity-50" /><p className="text-gray-400 dark:text-gray-500">Camera Off</p></div>}
                     </div>
                 </div>
@@ -551,6 +588,24 @@ const App: React.FC = () => {
                         <ReactMarkdown className="prose dark:prose-invert max-w-none break-words" remarkPlugins={[remarkMath, remarkGfm]} rehypePlugins={[rehypeKatex]}>{msg.text}</ReactMarkdown>
                     </div>
                   }
+                  
+                  {/* Grounding / Search Results Display */}
+                  {msg.groundingMetadata?.groundingChunks && (
+                      <div className="mt-3 pt-3 border-t border-black/10 dark:border-white/10 flex flex-wrap gap-2">
+                        {msg.groundingMetadata.groundingChunks.map((chunk: any, i: number) => {
+                            if (chunk.web?.uri) {
+                                return (
+                                    <a key={i} href={chunk.web.uri} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 px-2 py-1 bg-black/5 dark:bg-white/10 rounded-md text-xs hover:bg-black/10 dark:hover:bg-white/20 transition-colors text-blue-600 dark:text-blue-400">
+                                        <LinkIcon size={10} />
+                                        <span className="truncate max-w-[150px]">{chunk.web.title || chunk.web.uri}</span>
+                                    </a>
+                                );
+                            }
+                            return null;
+                        })}
+                      </div>
+                  )}
+
                   <div className={`text-[10px] mt-2 opacity-50 ${msg.role === 'user' ? 'text-black' : 'text-black dark:text-white'}`}>{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
                 </div>
                 {msg.role === 'user' && <img src={user.photoURL || PLACEHOLDER_AVATAR} alt="User" className="w-10 h-10 rounded-full border border-gray-300 dark:border-white/20 shrink-0 object-cover" />}
@@ -564,14 +619,27 @@ const App: React.FC = () => {
                  </div>
               </div>
             )}
-            {/* messagesEndRef is kept for legacy ref usage if needed, but scrolling is handled via chatContainerRef */}
             <div ref={messagesEndRef} />
           </div>
           <div className="shrink-0 p-4 md:p-6 bg-gradient-to-t from-gray-100 via-gray-100/80 to-transparent dark:from-black dark:via-black/80 dark:to-transparent">
+            {attachment && (
+                <div className="max-w-4xl mx-auto mb-2 flex items-center gap-2 px-2 animate-in fade-in slide-in-from-bottom-2">
+                    <div className="relative group">
+                        {attachment.type === 'pdf' ? (
+                            <div className="w-12 h-12 bg-red-100 dark:bg-red-900/30 rounded-lg flex items-center justify-center border border-red-200 dark:border-red-500/30 text-red-500"><FileText size={24} /></div>
+                        ) : (
+                            <img src={attachment.preview} className="w-12 h-12 rounded-lg object-cover border border-gray-300 dark:border-white/20" />
+                        )}
+                        <button onClick={() => setAttachment(null)} className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full p-0.5 hover:bg-red-600 shadow-md"><X size={12} /></button>
+                    </div>
+                    <div className="text-xs text-gray-500 dark:text-gray-400 bg-white/50 dark:bg-black/50 px-2 py-1 rounded-md">{attachment.file.name}</div>
+                </div>
+            )}
             <div className="relative flex items-center gap-2 max-w-4xl mx-auto bg-white dark:bg-white/5 p-2 rounded-2xl border border-gray-200 dark:border-white/10 shadow-xl">
-              <button onClick={() => alert("Coming Soon!")} className="p-3 text-gray-500 dark:text-gray-400 hover:text-black dark:hover:text-white hover:bg-gray-100 dark:hover:bg-white/10 rounded-xl transition-colors"><Paperclip size={20} /></button>
+              <button onClick={handleFileClick} className="p-3 text-gray-500 dark:text-gray-400 hover:text-black dark:hover:text-white hover:bg-gray-100 dark:hover:bg-white/10 rounded-xl transition-colors"><Paperclip size={20} /></button>
+              <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept="image/*,application/pdf" />
               <input type="text" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} placeholder={mode === AppMode.IMAGE ? "Describe an image to generate..." : "Ask Burnit AI anything..."} className="flex-1 bg-transparent text-black dark:text-white placeholder-gray-500 outline-none px-2 min-w-0" />
-              <button onClick={handleSendMessage} disabled={isLoading || !input.trim()} style={{ background: input.trim() ? 'linear-gradient(to right, #00f0ff, #ff2a2a)' : '#4B5563', opacity: input.trim() ? 1 : 1, cursor: input.trim() ? 'pointer' : 'default' }} className={`p-3 rounded-xl transition-all text-white hover:scale-105 active:scale-95`}><Send size={20} fill={input.trim() ? "currentColor" : "none"} /></button>
+              <button onClick={handleSendMessage} disabled={isLoading || (!input.trim() && !attachment)} style={{ background: (input.trim() || attachment) ? 'linear-gradient(to right, #00f0ff, #ff2a2a)' : '#4B5563', opacity: (input.trim() || attachment) ? 1 : 1, cursor: (input.trim() || attachment) ? 'pointer' : 'default' }} className={`p-3 rounded-xl transition-all text-white hover:scale-105 active:scale-95`}><Send size={20} fill={(input.trim() || attachment) ? "currentColor" : "none"} /></button>
             </div>
             <div className="text-center mt-2"><p className="text-[10px] text-gray-500 dark:text-gray-600">Burnit AI can make mistakes. Consider checking important information.</p></div>
           </div>

@@ -54,6 +54,14 @@ async function decodeAudioData(
   return buffer;
 }
 
+function calculateRMS(inputBuffer: Float32Array): number {
+  let sum = 0;
+  for (let i = 0; i < inputBuffer.length; i++) {
+    sum += inputBuffer[i] * inputBuffer[i];
+  }
+  return Math.sqrt(sum / inputBuffer.length);
+}
+
 const BURNIT_SYSTEM_INSTRUCTION = `
 You are Burnit AI! Your Personal Ai For Your Confusing Questions, Giving You Motivation 💪 And Help You In Any Error's!!
 
@@ -65,18 +73,14 @@ CRITICAL TEXT RULE:
 - When you write the name in text, ALWAYS spell it as "Aree".
 - NEVER write "Eri".
 
-FORMATTING & MATH RULES (STRICT):
-1. Use LaTeX for ALL math expressions and formulas.
-2. YOU MUST wrap ALL math in dollar signs.
-   - For Inline math use single dollar signs: $E=mc^2$
-   - For Block math use double dollar signs: $$ \\int_{a}^{b} x^2 dx $$
-3. Format your output using clean Markdown (headings, bullet points, bold text).
-4. Use Code Blocks for any code snippets.
-
 IDENTITY RULES:
 1. If asked "Who are you?", reply: "I am Burnit AI! Your Personal Ai For Your Confusing Questions, Giving You Motivation 💪 And Help You In Any Error's!!"
 2. If asked "Who created you?", reply: "Zsateishiish aka Samarpan Aree made me -- the man that takes 6 months to make me!!"
 3. You are NOT Gemini or Google.
+
+CAPABILITIES:
+- You have access to Google Search to check real-time websites.
+- You can analyze PDF documents and Images when they are uploaded.
 `;
 
 function sanitizeResponse(text: string): string {
@@ -101,7 +105,6 @@ class GeminiService {
 
   private ensureInitialized() {
       if (!this.ai || !this.currentKey) {
-          // Attempt reload from constants (in case environment loaded late)
           this.currentKey = GEMINI_API_KEY;
           if (this.currentKey) {
             this.ai = new GoogleGenAI({ apiKey: this.currentKey });
@@ -116,7 +119,7 @@ class GeminiService {
       newMessage: string, 
       attachment?: { mimeType: string; data: string } | null,
       language: string = 'English'
-  ) {
+  ): Promise<{ text: string, groundingMetadata: any }> {
     this.ensureInitialized();
     if (!this.ai) throw new Error("AI Client not initialized");
 
@@ -125,6 +128,7 @@ class GeminiService {
         model: MODEL_TEXT,
         config: {
           systemInstruction: `${BURNIT_SYSTEM_INSTRUCTION}\n\nYou must respond in ${language}.`,
+          tools: [{ googleSearch: {} }],
         },
         history: history
       });
@@ -147,7 +151,12 @@ class GeminiService {
       });
       
       const rawText = result.text;
-      return sanitizeResponse(rawText);
+      const groundingMetadata = result.candidates?.[0]?.groundingMetadata;
+
+      return { 
+          text: sanitizeResponse(rawText),
+          groundingMetadata: groundingMetadata 
+      };
     } catch (error) {
       console.error("Gemini Chat Error:", error);
       throw error;
@@ -189,7 +198,8 @@ class GeminiService {
 
   async connectLive(
     onAudioData: (buffer: AudioBuffer) => void,
-    onClose: () => void
+    onClose: () => void,
+    onSpeakingStateChanged?: (isSpeaking: boolean) => void
   ) {
     this.ensureInitialized();
     if (!this.ai) throw new Error("AI Client not initialized");
@@ -202,6 +212,86 @@ class GeminiService {
 
     const sources = new Set<AudioBufferSourceNode>();
     let nextStartTime = 0;
+    let activeSourcesCount = 0;
+    
+    // Timer Variables
+    let silenceTimer: any = null;
+    let muteTimer: any = null;
+    let isMuted = false;
+    
+    const SILENCE_THRESHOLD_MS = 10000; // 10s
+    const MIN_VOLUME_THRESHOLD = 0.02; 
+
+    // History (Memory)
+    let currentInputTranscription = '';
+    let currentOutputTranscription = '';
+    const HISTORY_KEY = 'burnit_live_history_v1';
+    
+    // 1. Prepare System Instruction with Memory
+    let liveSystemInstruction = BURNIT_SYSTEM_INSTRUCTION;
+    try {
+        const savedHistory = localStorage.getItem(HISTORY_KEY);
+        if (savedHistory) {
+            const turns = JSON.parse(savedHistory);
+            // Format turns into a readable context string for the model
+            const conversationContext = turns.map((t: any) => `[${t.role.toUpperCase()}]: ${t.text}`).join('\n');
+            if (conversationContext) {
+                console.log("Restoring conversation memory...");
+                liveSystemInstruction += `\n\n=== MEMORY OF PREVIOUS CONVERSATION ===\n${conversationContext}\n\nResume the conversation naturally based on this context.`;
+            }
+        }
+    } catch(e) { console.error("History load error", e); }
+
+    // TTS Helper (Fallback for forcing AI to speak)
+    const playTTSPrompt = async (text: string) => {
+        if (!this.ai) return;
+        try {
+            console.log("Generating TTS Prompt:", text);
+            const response = await this.ai.models.generateContent({
+                model: 'gemini-2.5-flash-preview-tts',
+                contents: { parts: [{ text }] },
+                config: {
+                    responseModalities: [Modality.AUDIO],
+                    speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } } }
+                }
+            });
+
+            const audioData = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+            if (audioData) {
+                const audioBuffer = await decodeAudioData(decode(audioData), outputAudioContext, 24000, 1);
+                
+                // Play audio
+                const source = outputAudioContext.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(outputAudioContext.destination);
+                
+                // Manage state so timers reset
+                activeSourcesCount++;
+                if (onSpeakingStateChanged) onSpeakingStateChanged(true);
+                
+                source.addEventListener('ended', () => {
+                   sources.delete(source);
+                   activeSourcesCount--;
+                   if (activeSourcesCount <= 0) {
+                        activeSourcesCount = 0;
+                        if (onSpeakingStateChanged) onSpeakingStateChanged(false);
+                        
+                        // Restart timers after TTS finishes
+                        if (isMuted) {
+                             if (muteTimer) clearTimeout(muteTimer);
+                             muteTimer = setTimeout(() => playTTSPrompt("I am still muted. Say exactly: Ummm! Anyone there?"), SILENCE_THRESHOLD_MS);
+                        } else {
+                             if (silenceTimer) clearTimeout(silenceTimer);
+                             silenceTimer = setTimeout(() => playTTSPrompt("Say exactly: Ummm! Anyone there?"), SILENCE_THRESHOLD_MS);
+                        }
+                   }
+                });
+                
+                source.start();
+                sources.add(source);
+            }
+        } catch(e) { console.error("TTS Error", e); }
+    };
 
     let stream: MediaStream;
     try {
@@ -217,30 +307,100 @@ class GeminiService {
           callbacks: {
             onopen: () => {
               console.log("Burnit AI Live Connection Opened");
+              
               const source = inputAudioContext.createMediaStreamSource(stream);
               const scriptProcessor = inputAudioContext.createScriptProcessor(4096, 1, 1);
               
               scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
                 const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
                 const pcmBlob = createBlob(inputData);
-                sessionPromise.then((session) => {
-                  session.sendRealtimeInput({ media: pcmBlob });
-                });
+                
+                // Only send audio if NOT muted
+                if (!isMuted) {
+                    sessionPromise.then((session) => {
+                        session.sendRealtimeInput({ media: pcmBlob });
+                    });
+
+                    // Silence Detection
+                    const currentVolume = calculateRMS(inputData);
+                    if (currentVolume > MIN_VOLUME_THRESHOLD) {
+                        if (silenceTimer) clearTimeout(silenceTimer);
+                        
+                        silenceTimer = setTimeout(() => {
+                            if (activeSourcesCount === 0 && !isMuted) {
+                                console.log("User AFK. Triggering TTS.");
+                                playTTSPrompt("Ummm! Anyone there?");
+                            }
+                        }, SILENCE_THRESHOLD_MS);
+                    }
+                }
               };
+
               source.connect(scriptProcessor);
               scriptProcessor.connect(inputAudioContext.destination);
+
+              // Initial Silence Timer
+              silenceTimer = setTimeout(() => {
+                  if (activeSourcesCount === 0 && !isMuted) {
+                       playTTSPrompt("Ummm! Anyone there?");
+                  }
+              }, SILENCE_THRESHOLD_MS);
             },
             onmessage: async (message: LiveServerMessage) => {
+              // 1. Capture Transcriptions for History
+              const serverContent = message.serverContent;
+              if (serverContent) {
+                  if (serverContent.outputTranscription?.text) {
+                      currentOutputTranscription += serverContent.outputTranscription.text;
+                  }
+                  if (serverContent.inputTranscription?.text) {
+                      currentInputTranscription += serverContent.inputTranscription.text;
+                  }
+                  
+                  if (serverContent.turnComplete) {
+                      // Save interaction pair
+                      if (currentInputTranscription || currentOutputTranscription) {
+                          try {
+                              const existingJson = localStorage.getItem(HISTORY_KEY);
+                              let history = existingJson ? JSON.parse(existingJson) : [];
+                              
+                              if (currentInputTranscription) history.push({ role: 'user', text: currentInputTranscription });
+                              if (currentOutputTranscription) history.push({ role: 'model', text: currentOutputTranscription });
+                              
+                              // Limit history size to prevent context overflow
+                              if (history.length > 20) history = history.slice(-20);
+                              
+                              localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+                              
+                              // Reset buffers
+                              currentInputTranscription = '';
+                              currentOutputTranscription = '';
+                          } catch(e) {}
+                      }
+                  }
+              }
+
+              // 2. Interruption Handling
               if (message.serverContent?.interrupted) {
                   for (const source of sources) {
                       source.stop();
                   }
                   sources.clear();
                   nextStartTime = 0;
+                  activeSourcesCount = 0;
+                  if (onSpeakingStateChanged) onSpeakingStateChanged(false);
+                  
+                  if (silenceTimer) clearTimeout(silenceTimer);
+                  if (muteTimer) clearTimeout(muteTimer);
                   return;
               }
+
+              // 3. Audio Playback
               const base64EncodedAudioString = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
               if (base64EncodedAudioString) {
+                if (silenceTimer) clearTimeout(silenceTimer);
+                if (muteTimer) clearTimeout(muteTimer);
+
                 const audioBuffer = await decodeAudioData(
                   decode(base64EncodedAudioString),
                   outputAudioContext,
@@ -251,12 +411,31 @@ class GeminiService {
                 const source = outputAudioContext.createBufferSource();
                 source.buffer = audioBuffer;
                 source.connect(outputAudioContext.destination);
+                
                 source.addEventListener('ended', () => {
                   sources.delete(source);
+                  activeSourcesCount--;
+                  if (activeSourcesCount <= 0) {
+                      activeSourcesCount = 0;
+                      if (onSpeakingStateChanged) onSpeakingStateChanged(false);
+
+                      // Restart Timer
+                      if (isMuted) {
+                          if (muteTimer) clearTimeout(muteTimer);
+                          muteTimer = setTimeout(() => playTTSPrompt("I am still muted. Say exactly: Ummm! Anyone there?"), SILENCE_THRESHOLD_MS);
+                      } else {
+                          if (silenceTimer) clearTimeout(silenceTimer);
+                          silenceTimer = setTimeout(() => playTTSPrompt("Say exactly: Ummm! Anyone there?"), SILENCE_THRESHOLD_MS);
+                      }
+                  }
                 });
+
                 source.start(nextStartTime);
                 nextStartTime = nextStartTime + audioBuffer.duration;
                 sources.add(source);
+                
+                activeSourcesCount++;
+                if (onSpeakingStateChanged) onSpeakingStateChanged(true);
               }
             },
             onerror: (e) => {
@@ -273,19 +452,49 @@ class GeminiService {
             speechConfig: {
               voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } },
             },
-            systemInstruction: BURNIT_SYSTEM_INSTRUCTION,
+            // Fixed: Empty objects for default transcription
+            inputAudioTranscription: {}, 
+            outputAudioTranscription: {},
+            // Removed googleSearch tool to prevent 'invalid argument' in Live API
+            systemInstruction: liveSystemInstruction, 
           },
         });
 
         return {
             disconnect: () => {
+                if (silenceTimer) clearTimeout(silenceTimer);
+                if (muteTimer) clearTimeout(muteTimer);
                 sessionPromise.then(session => session.close());
                 stream.getTracks().forEach(track => track.stop());
                 inputAudioContext.close();
                 outputAudioContext.close();
             },
             toggleMute: (mute: boolean) => {
+                isMuted = mute;
                 stream.getAudioTracks().forEach(track => track.enabled = !mute);
+                
+                if (mute) {
+                    // Muted: Clear volume timer, Start Mute Timer
+                    if (silenceTimer) clearTimeout(silenceTimer);
+                    if (muteTimer) clearTimeout(muteTimer);
+                    
+                    muteTimer = setTimeout(() => {
+                        if (activeSourcesCount === 0) {
+                            console.log("Mute Timeout. TTS Prompt.");
+                            playTTSPrompt("Ummm! Anyone there?");
+                        }
+                    }, SILENCE_THRESHOLD_MS);
+                } else {
+                    // Unmuted: Clear mute timer, Start volume timer
+                    if (muteTimer) clearTimeout(muteTimer);
+                    if (silenceTimer) clearTimeout(silenceTimer);
+                    
+                    silenceTimer = setTimeout(() => {
+                         if (activeSourcesCount === 0) {
+                             playTTSPrompt("Ummm! Anyone there?");
+                         }
+                    }, SILENCE_THRESHOLD_MS);
+                }
             },
             sendVideoFrame: (base64Data: string) => {
                 sessionPromise.then(session => {
