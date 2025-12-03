@@ -1,0 +1,8 @@
+{
+  "name": "Burnit AI",
+  "description": "Next-generation AI assistant featuring Real-time Gemini Live voice conversations, image generation, and multi-modal chat.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}

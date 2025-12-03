@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Burnit AI</title>
+    <!-- Added Typography Plugin for nice Markdown styling -->
+    <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;700&display=swap" rel="stylesheet">
+    <!-- Katex CSS for Math -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV" crossorigin="anonymous">
+    
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+              display: ['Outfit', 'sans-serif'],
+            },
+            colors: {
+              burnit: {
+                cyan: '#00f0ff',
+                red: '#ff2a2a',
+                dark: '#0a0a0a',
+                panel: '#1a1a1a'
+              }
+            },
+            animation: {
+              'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+              'flame': 'flame 1s ease-in-out infinite alternate',
+              'spin-slow': 'spin 8s linear infinite',
+              'spin-reverse-slow': 'spin-reverse 10s linear infinite',
+              'ripple': 'ripple 2s linear infinite',
+              'hex-pulse': 'hexPulse 2s ease-in-out infinite',
+              'scan-line': 'scanLine 3s linear infinite',
+            },
+            keyframes: {
+              flame: {
+                '0%': { transform: 'scale(1)', opacity: '0.9' },
+                '100%': { transform: 'scale(1.05)', opacity: '1' },
+              },
+              ripple: {
+                '0%': { transform: 'scale(1)', opacity: '0.6', border: '2px solid rgba(0, 240, 255, 0.5)' },
+                '100%': { transform: 'scale(2.5)', opacity: '0', border: '0px solid rgba(0, 240, 255, 0)' },
+              },
+              'spin-reverse': {
+                '0%': { transform: 'rotate(0deg)' },
+                '100%': { transform: 'rotate(-360deg)' },
+              },
+              hexPulse: {
+                '0%': { borderColor: 'rgba(0, 240, 255, 0.2)', boxShadow: '0 0 10px rgba(0, 240, 255, 0.1)' },
+                '50%': { borderColor: 'rgba(0, 240, 255, 0.8)', boxShadow: '0 0 30px rgba(0, 240, 255, 0.4)' },
+                '100%': { borderColor: 'rgba(0, 240, 255, 0.2)', boxShadow: '0 0 10px rgba(0, 240, 255, 0.1)' },
+              },
+              scanLine: {
+                '0%': { top: '0%', opacity: '0' },
+                '10%': { opacity: '1' },
+                '90%': { opacity: '1' },
+                '100%': { top: '100%', opacity: '0' },
+              }
+            }
+          },
+        },
+      }
+    </script>
+    <style>
+      /* Custom Scrollbar */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent; 
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #333; 
+        border-radius: 4px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #555; 
+      }
+      .glass-panel {
+        background: rgba(26, 26, 26, 0.7);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+      }
+      /* Hexagon Clip Path */
+      .hexagon-clip {
+        clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+      }
+      
+      /* Markdown Styles Override for Chat */
+      .prose p { margin-bottom: 0.5em; margin-top: 0.5em; }
+      .prose pre { background-color: #1f2937; color: #e5e7eb; padding: 0.75rem; border-radius: 0.5rem; }
+      .prose code { color: #00f0ff; background: rgba(0,0,0,0.2); padding: 0.2em 0.4em; border-radius: 0.25em; font-weight: 600; }
+      .prose pre code { color: inherit; background: transparent; padding: 0; }
+      .prose strong { color: inherit; font-weight: 700; }
+      .prose ul { list-style-type: disc; padding-left: 1.5em; }
+      .prose ol { list-style-type: decimal; padding-left: 1.5em; }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "firebase/": "https://aistudiocdn.com/firebase@^12.6.0/",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.555.0",
+    "react-markdown": "https://esm.sh/react-markdown@9?bundle",
+    "remark-math": "https://esm.sh/remark-math@6?bundle",
+    "rehype-katex": "https://esm.sh/rehype-katex@7?bundle",
+    "remark-gfm": "https://esm.sh/remark-gfm@4?bundle"
+  }
+}
+</script>
+</head>
+  <body class="bg-black text-white antialiased overflow-hidden">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
