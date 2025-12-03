@@ -10,8 +10,38 @@ export const FIREBASE_CONFIG = {
 };
 
 // ⚠️ API KEYS SETUP ⚠️
-// The API key is now strictly pulled from the environment variable.
-export const GEMINI_API_KEY = process.env.API_KEY || "";
+// We safely check both process.env (Node/System) and import.meta.env (Vite/Browser)
+// to ensure the key is found regardless of the environment setup.
+const getApiKey = () => {
+  let key = "";
+  
+  // 1. Try standard process.env (if polyfilled or Node)
+  try {
+    if (typeof process !== "undefined" && process.env?.API_KEY) {
+      key = process.env.API_KEY;
+    }
+  } catch (e) {}
+
+  // 2. Try Vite's import.meta.env (Browser standard for Vite)
+  if (!key) {
+    try {
+      // @ts-ignore
+      if (import.meta.env?.VITE_API_KEY) {
+        // @ts-ignore
+        key = import.meta.env.VITE_API_KEY;
+      }
+      // @ts-ignore
+      else if (import.meta.env?.API_KEY) {
+         // @ts-ignore
+        key = import.meta.env.API_KEY;
+      }
+    } catch (e) {}
+  }
+  
+  return key;
+};
+
+export const GEMINI_API_KEY = getApiKey();
 
 // Gemini Models
 export const MODEL_TEXT = 'gemini-2.5-flash'; 

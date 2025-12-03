@@ -95,25 +95,20 @@ class GeminiService {
     if (this.currentKey) {
         this.ai = new GoogleGenAI({ apiKey: this.currentKey });
     } else {
-        console.warn("Burnit AI: No API Key found.");
+        console.warn("Burnit AI: No API Key found in environment variables.");
     }
   }
 
   private ensureInitialized() {
       if (!this.ai || !this.currentKey) {
-          // Try to fetch again if it was set later
+          // Attempt reload from constants (in case environment loaded late)
           this.currentKey = GEMINI_API_KEY;
           if (this.currentKey) {
             this.ai = new GoogleGenAI({ apiKey: this.currentKey });
           } else {
-            throw new Error("API Key is missing. Please check your settings or environment variables.");
+            throw new Error("API Key is missing. Please check your .env file or environment variables.");
           }
       }
-  }
-
-  setApiKey(key: string) {
-      this.currentKey = key;
-      this.ai = new GoogleGenAI({ apiKey: key });
   }
 
   async sendMessage(
