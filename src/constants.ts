@@ -10,8 +10,8 @@ export const FIREBASE_CONFIG = {
 };
 
 // ⚠️ API KEYS SETUP ⚠️
-export const GEMINI_API_KEY = "AIzaSyDjgF9859bF1qDmGZDHL-m82a6RZwEX8t0"; 
-export const OPENAI_API_KEY = "";
+// The API key is now strictly pulled from the environment variable.
+export const GEMINI_API_KEY = process.env.API_KEY || "";
 
 // Gemini Models
 export const MODEL_TEXT = 'gemini-2.5-flash'; 

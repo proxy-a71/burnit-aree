@@ -27,7 +27,6 @@ function createBlob(data: Float32Array): { data: string; mimeType: string } {
   const l = data.length;
   const int16 = new Int16Array(l);
   for (let i = 0; i < l; i++) {
-    // Convert Float32 (-1.0 to 1.0) to Int16
     int16[i] = Math.max(-1, Math.min(1, data[i])) * 32768;
   }
   return {
@@ -55,8 +54,6 @@ async function decodeAudioData(
   return buffer;
 }
 
-// --- Constants & System Instructions ---
-
 const BURNIT_SYSTEM_INSTRUCTION = `
 You are Burnit AI! Your Personal Ai For Your Confusing Questions, Giving You Motivation 💪 And Help You In Any Error's!!
 
@@ -82,50 +79,52 @@ IDENTITY RULES:
 3. You are NOT Gemini or Google.
 `;
 
-// Helper to sanitize text output
 function sanitizeResponse(text: string): string {
   if (!text) return "";
-  // Replace Gemini or Google with Samarpan Aree as requested
-  let cleaned = text.replace(/\bGemini\b/gi, "Burnit AI"); // Contextual fix
-  cleaned = cleaned.replace(/\bGoogle\b/gi, "Samarpan Aree"); // Contextual fix
+  let cleaned = text.replace(/\bGemini\b/gi, "Burnit AI");
+  cleaned = cleaned.replace(/\bGoogle\b/gi, "Samarpan Aree");
   return cleaned;
 }
 
-// --- Main Service ---
-
 class GeminiService {
-  private ai: GoogleGenAI;
+  private ai: GoogleGenAI | null = null;
   private currentKey: string;
 
   constructor() {
-    // ⚠️ CRITICAL: Always prioritize the hardcoded GEMINI_API_KEY from constants.ts
-    this.currentKey = GEMINI_API_KEY; 
-    
-    // Fallback to process.env if available (for standard Node/Vite envs)
-    if (!this.currentKey && typeof process !== 'undefined' && process.env.API_KEY) {
-        this.currentKey = process.env.API_KEY;
+    this.currentKey = GEMINI_API_KEY;
+    if (this.currentKey) {
+        this.ai = new GoogleGenAI({ apiKey: this.currentKey });
+    } else {
+        console.warn("Burnit AI: No API Key found.");
     }
-
-    if (!this.currentKey) {
-        console.warn("Burnit AI: No API Key found in constants or env.");
-    }
-
-    this.ai = new GoogleGenAI({ apiKey: this.currentKey });
   }
 
-  // Method to update key at runtime (from Settings)
+  private ensureInitialized() {
+      if (!this.ai || !this.currentKey) {
+          // Try to fetch again if it was set later
+          this.currentKey = GEMINI_API_KEY;
+          if (this.currentKey) {
+            this.ai = new GoogleGenAI({ apiKey: this.currentKey });
+          } else {
+            throw new Error("API Key is missing. Please check your settings or environment variables.");
+          }
+      }
+  }
+
   setApiKey(key: string) {
       this.currentKey = key;
       this.ai = new GoogleGenAI({ apiKey: key });
   }
 
-  // 1. Chat Functionality (Updated for Attachments)
   async sendMessage(
       history: { role: string; parts: { text?: string; inlineData?: any }[] }[], 
       newMessage: string, 
       attachment?: { mimeType: string; data: string } | null,
       language: string = 'English'
   ) {
+    this.ensureInitialized();
+    if (!this.ai) throw new Error("AI Client not initialized");
+
     try {
       const chat = this.ai.chats.create({
         model: MODEL_TEXT,
@@ -135,7 +134,6 @@ class GeminiService {
         history: history
       });
 
-      // Construct the message part
       const parts: any[] = [{ text: newMessage }];
       if (attachment) {
           parts.push({
@@ -161,8 +159,10 @@ class GeminiService {
     }
   }
 
-  // 2. Image Generation
   async generateImage(prompt: string): Promise<{ url: string | null, text: string }> {
+     this.ensureInitialized();
+     if (!this.ai) throw new Error("AI Client not initialized");
+
      try {
         const response = await this.ai.models.generateContent({
             model: MODEL_IMAGE,
@@ -192,27 +192,16 @@ class GeminiService {
      }
   }
 
-  // 3. Live API Connection
   async connectLive(
     onAudioData: (buffer: AudioBuffer) => void,
     onClose: () => void
   ) {
-    // Re-verify key in case it was missing during init
-    if (!this.currentKey) {
-        this.currentKey = GEMINI_API_KEY;
-        if (this.currentKey) {
-             this.ai = new GoogleGenAI({ apiKey: this.currentKey });
-        } else {
-             throw new Error("API Key is missing in code (constants.ts).");
-        }
-    }
+    this.ensureInitialized();
+    if (!this.ai) throw new Error("AI Client not initialized");
 
-    // Audio Context Setup
     const inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
     const outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
     
-    // CRITICAL for Android/Mobile: Resume contexts immediately
-    // Browsers often suspend AudioContext until user interaction
     await inputAudioContext.resume();
     await outputAudioContext.resume();
 
@@ -233,7 +222,6 @@ class GeminiService {
           callbacks: {
             onopen: () => {
               console.log("Burnit AI Live Connection Opened");
-              
               const source = inputAudioContext.createMediaStreamSource(stream);
               const scriptProcessor = inputAudioContext.createScriptProcessor(4096, 1, 1);
               
@@ -248,9 +236,7 @@ class GeminiService {
               scriptProcessor.connect(inputAudioContext.destination);
             },
             onmessage: async (message: LiveServerMessage) => {
-              // 1. Handle Interruption: If the user talks, stop the AI immediately.
               if (message.serverContent?.interrupted) {
-                  console.log("Burnit AI: User interrupted, clearing audio queue.");
                   for (const source of sources) {
                       source.stop();
                   }
@@ -258,10 +244,7 @@ class GeminiService {
                   nextStartTime = 0;
                   return;
               }
-
-              // 2. Handle incoming audio
               const base64EncodedAudioString = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
-              
               if (base64EncodedAudioString) {
                 const audioBuffer = await decodeAudioData(
                   decode(base64EncodedAudioString),
@@ -269,17 +252,13 @@ class GeminiService {
                   24000,
                   1,
                 );
-                
-                // Scheduling logic to ensure smooth playback
                 nextStartTime = Math.max(nextStartTime, outputAudioContext.currentTime);
                 const source = outputAudioContext.createBufferSource();
                 source.buffer = audioBuffer;
                 source.connect(outputAudioContext.destination);
-                
                 source.addEventListener('ended', () => {
                   sources.delete(source);
                 });
-
                 source.start(nextStartTime);
                 nextStartTime = nextStartTime + audioBuffer.duration;
                 sources.add(source);
@@ -303,7 +282,6 @@ class GeminiService {
           },
         });
 
-        // Return controls
         return {
             disconnect: () => {
                 sessionPromise.then(session => session.close());
@@ -327,7 +305,7 @@ class GeminiService {
         };
     } catch (error) {
         console.error("Failed to establish Live connection", error);
-        stream.getTracks().forEach(track => track.stop()); // Cleanup mic if connection fails
+        stream.getTracks().forEach(track => track.stop());
         throw error;
     }
   }
