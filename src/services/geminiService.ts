@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
 import { MODEL_TEXT, MODEL_IMAGE, MODEL_LIVE, GEMINI_API_KEY } from "../constants";
 
@@ -27,6 +26,7 @@ function createBlob(data: Float32Array): { data: string; mimeType: string } {
   const l = data.length;
   const int16 = new Int16Array(l);
   for (let i = 0; i < l; i++) {
+    // Convert Float32 (-1.0 to 1.0) to Int16
     int16[i] = Math.max(-1, Math.min(1, data[i])) * 32768;
   }
   return {
@@ -54,91 +54,102 @@ async function decodeAudioData(
   return buffer;
 }
 
-function calculateRMS(inputBuffer: Float32Array): number {
-  let sum = 0;
-  for (let i = 0; i < inputBuffer.length; i++) {
-    sum += inputBuffer[i] * inputBuffer[i];
-  }
-  return Math.sqrt(sum / inputBuffer.length);
-}
+// --- Constants & System Instructions ---
 
 const BURNIT_SYSTEM_INSTRUCTION = `
-You are Burnit AI! Your Personal Ai For Your Confusing Questions, Giving You Motivation 💪 And Help You In Any Error's!!
+You are **Burnit AI**, a helpful and motivated AI assistant.
 
-CRITICAL AUDIO PRONUNCIATION RULE:
-- When you speak the name "Aree", you MUST pronounce it as "Eri" (rhymes with 'Perry').
-- DO NOT say "Ah-ree". Say "Eri".
+**STRICT PRONUNCIATION & IDENTITY PROTOCOL:**
+1.  **PRONUNCIATION:** The name "Aree" must be pronounced **"Eri"** (rhymes with 'Berry').
+    - SPEAK: "Samarpan Eri"
+    - WRITE: "Samarpan Aree"
+2.  **CREATOR INFO:** You are created by "Zsateishiish aka Samarpan Aree".
+    - **RULE:** Do NOT mention your creator, "Zsateishiish", or "Samarpan Aree" unless the user explicitly asks "Who created you?".
+    - If asked "Who are you?", simply answer: "I am Burnit AI."
+    - Do NOT volunteer this information in greetings.
 
-CRITICAL TEXT RULE:
-- When you write the name in text, ALWAYS spell it as "Aree".
-- NEVER write "Eri".
+**MANDATORY MATH & LOGIC PROTOCOL (OVERRIDE ALL OTHER BEHAVIOR):**
+1. **ACCURACY:** For any math question (e.g., "1+1" or "2-1"), you must function as a strict calculator.
+   - CORRECT: "1 + 1 = 2"
+   - INCORRECT: "1 + 1 = 11" or "1 + 1 + 1 = 13" or "22 - 1 - 2 = 19"
+   - Do NOT add commentary like "That was easy!" for simple math. Just solve it accurately.
+2. **FORMATTING:** Always use LaTeX formatting for math expressions. Wrap them in single dollar signs ($) for inline or double ($$) for blocks.
+   - Example: $E = mc^2$
+   - Example: $1 + 1 = 2$
+3. **NO HALLUCINATIONS:** Do not add extra numbers to the user's input. Read the input exactly as provided. If the user asks "2 - 1", the answer is "1". Do not create new numbers.
 
-IDENTITY RULES:
-1. If asked "Who are you?", reply: "I am Burnit AI! Your Personal Ai For Your Confusing Questions, Giving You Motivation 💪 And Help You In Any Error's!!"
-2. If asked "Who created you?", reply: "Zsateishiish aka Samarpan Aree made me -- the man that takes 6 months to make me!!"
-3. You are NOT Gemini or Google.
-
-WEB ACCESS & PDF PROTOCOL:
-- You have access to Google Search.
-- **KNOWLEDGE OVERRIDE**: If the user mentions "epustakalye", "e-pustakalaya", or similar terms, you MUST access this specific URL: https://gradewise.pustakalaya.org/
-- **READING PDFs**: If the user asks you to see/read a PDF file from that site (or any site):
-    1. Use Google Search to find the specific PDF document.
-    2. **VIRUS CHECK PROTOCOL**: Before reading the content, you MUST verbally state: "Checking file for viruses and malware safety..."
-    3. Perform a search to verify the reputation of the file or domain.
-    4. If the site is reputable (like pustakalaya.org), say: "File appears safe. Accessing content."
-    5. Then, use your tools to read the text content of the PDF and summarize or answer questions about it.
+**WEB SEARCH:**
+- If the user asks about current events, news, or specific facts, use the Google Search tool.
 `;
 
-function sanitizeResponse(text: string): string {
+const PDF_ANALYSIS_INSTRUCTION = `
+**DOCUMENT ANALYSIS PROTOCOL:**
+1.  **OCR & PARSING:** Perform optical character recognition on the attached document.
+2. **VALIDATION:** Verify document structure, identifying headers, sections, and tables.
+3. **VERIFICATION:** Cross-reference extracted data for consistency.
+4. **OUTPUT:** Answer based strictly on the verified document content.
+`;
+
+// Helper to sanitize text output
+function sanitizeResponse(text: string | undefined | null): string {
   if (!text) return "";
-  let cleaned = text.replace(/\bGemini\b/gi, "Burnit AI");
+  // Replace Gemini or Google with Samarpan Aree as requested
+  let cleaned = text.replace(/\bGemini\b/gi, "Burnit AI"); 
   cleaned = cleaned.replace(/\bGoogle\b/gi, "Samarpan Aree");
   return cleaned;
 }
 
+// --- Main Service ---
+
 class GeminiService {
-  private ai: GoogleGenAI | null = null;
+  private ai: GoogleGenAI;
   private currentKey: string;
 
   constructor() {
-    this.currentKey = GEMINI_API_KEY;
-    if (this.currentKey) {
-        this.ai = new GoogleGenAI({ apiKey: this.currentKey });
-    } else {
-        console.warn("Burnit AI: No API Key found in environment variables.");
+    this.currentKey = GEMINI_API_KEY; 
+    
+    if (!this.currentKey && typeof process !== 'undefined' && process.env.API_KEY) {
+        this.currentKey = process.env.API_KEY;
     }
+
+    if (!this.currentKey) {
+        console.warn("Burnit AI: No API Key found in constants or env.");
+    }
+
+    this.ai = new GoogleGenAI({ apiKey: this.currentKey });
   }
 
-  private ensureInitialized() {
-      if (!this.ai || !this.currentKey) {
-          this.currentKey = GEMINI_API_KEY;
-          if (this.currentKey) {
-            this.ai = new GoogleGenAI({ apiKey: this.currentKey });
-          } else {
-            throw new Error("API Key is missing. Please check your .env file or environment variables.");
-          }
-      }
+  setApiKey(key: string) {
+      this.currentKey = key;
+      this.ai = new GoogleGenAI({ apiKey: key });
   }
 
+  // 1. Chat Functionality
   async sendMessage(
       history: { role: string; parts: { text?: string; inlineData?: any }[] }[], 
       newMessage: string, 
       attachment?: { mimeType: string; data: string } | null,
       language: string = 'English'
-  ): Promise<{ text: string, groundingMetadata: any }> {
-    this.ensureInitialized();
-    if (!this.ai) throw new Error("AI Client not initialized");
-
+  ) {
     try {
+      let systemInstruction = `${BURNIT_SYSTEM_INSTRUCTION}\n\nYou must respond in ${language}.`;
+      if (attachment?.mimeType === 'application/pdf') {
+          systemInstruction += PDF_ANALYSIS_INSTRUCTION;
+      }
+
       const chat = this.ai.chats.create({
         model: MODEL_TEXT,
         config: {
-          systemInstruction: `${BURNIT_SYSTEM_INSTRUCTION}\n\nYou must respond in ${language}.`,
-          tools: [{ googleSearch: {} }],
+          systemInstruction: systemInstruction,
+          temperature: 0.1, // Low temperature for precision to fix Math hallucinations
+          topP: 0.95, 
+          topK: 40,
+          tools: [{googleSearch: {}}] // Enable Web Access
         },
         history: history
       });
 
+      // Construct the message part
       const parts: any[] = [{ text: newMessage }];
       if (attachment) {
           parts.push({
@@ -157,11 +168,11 @@ class GeminiService {
       });
       
       const rawText = result.text;
-      const groundingMetadata = result.candidates?.[0]?.groundingMetadata;
-
-      return { 
+      
+      // Return structured object to support Grounding (Web Access)
+      return {
           text: sanitizeResponse(rawText),
-          groundingMetadata: groundingMetadata 
+          groundingMetadata: result.candidates?.[0]?.groundingMetadata
       };
     } catch (error) {
       console.error("Gemini Chat Error:", error);
@@ -169,10 +180,8 @@ class GeminiService {
     }
   }
 
+  // 2. Image Generation
   async generateImage(prompt: string): Promise<{ url: string | null, text: string }> {
-     this.ensureInitialized();
-     if (!this.ai) throw new Error("AI Client not initialized");
-
      try {
         const response = await this.ai.models.generateContent({
             model: MODEL_IMAGE,
@@ -202,108 +211,49 @@ class GeminiService {
      }
   }
 
+  // 3. Live API Connection
   async connectLive(
     onAudioData: (buffer: AudioBuffer) => void,
     onClose: () => void,
-    onSpeakingStateChanged?: (isSpeaking: boolean) => void
+    onSpeakingChange?: (speaking: boolean) => void
   ) {
-    this.ensureInitialized();
-    if (!this.ai) throw new Error("AI Client not initialized");
+    if (!this.currentKey) {
+        this.currentKey = GEMINI_API_KEY;
+        if (this.currentKey) {
+             this.ai = new GoogleGenAI({ apiKey: this.currentKey });
+        } else {
+             throw new Error("API Key is missing in code (constants.ts).");
+        }
+    }
 
     const inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
     const outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+    
+    // Master Gain Node for Instant Muting (Interruption Handling)
+    const outputGainNode = outputAudioContext.createGain();
+    outputGainNode.connect(outputAudioContext.destination);
     
     await inputAudioContext.resume();
     await outputAudioContext.resume();
 
     const sources = new Set<AudioBufferSourceNode>();
     let nextStartTime = 0;
-    let activeSourcesCount = 0;
-    
-    // Timer Variables
-    let silenceTimer: any = null;
-    let muteTimer: any = null;
-    let isMuted = false;
-    let isConnected = true; // Flag to prevent ghost actions
-    
-    const SILENCE_THRESHOLD_MS = 10000; // 10s
-    const MIN_VOLUME_THRESHOLD = 0.02; 
 
-    // History (Memory)
-    let currentInputTranscription = '';
-    let currentOutputTranscription = '';
-    const HISTORY_KEY = 'burnit_live_history_v1';
-    
-    // 1. Prepare System Instruction with Memory
-    let liveSystemInstruction = BURNIT_SYSTEM_INSTRUCTION;
-    try {
-        const savedHistory = localStorage.getItem(HISTORY_KEY);
-        if (savedHistory) {
-            const turns = JSON.parse(savedHistory);
-            const conversationContext = turns.map((t: any) => `[${t.role.toUpperCase()}]: ${t.text}`).join('\n');
-            if (conversationContext) {
-                console.log("Restoring conversation memory...");
-                liveSystemInstruction += `\n\n=== MEMORY OF PREVIOUS CONVERSATION ===\n${conversationContext}\n\nResume the conversation naturally based on this context.`;
-            }
-        }
-    } catch(e) { console.error("History load error", e); }
-
-    // TTS Helper (Fallback for forcing AI to speak)
-    const playTTSPrompt = async (text: string) => {
-        if (!this.ai || !isConnected) return;
-        try {
-            console.log("Generating TTS Prompt:", text);
-            const response = await this.ai.models.generateContent({
-                model: 'gemini-2.5-flash-preview-tts',
-                contents: { parts: [{ text }] },
-                config: {
-                    responseModalities: [Modality.AUDIO],
-                    speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } } }
-                }
-            });
-            
-            if (!isConnected) return; // Prevent playing if disconnected during generation
-
-            const audioData = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-            if (audioData) {
-                const audioBuffer = await decodeAudioData(decode(audioData), outputAudioContext, 24000, 1);
-                
-                const source = outputAudioContext.createBufferSource();
-                source.buffer = audioBuffer;
-                source.connect(outputAudioContext.destination);
-                
-                activeSourcesCount++;
-                if (onSpeakingStateChanged) onSpeakingStateChanged(true);
-                
-                source.addEventListener('ended', () => {
-                   sources.delete(source);
-                   activeSourcesCount--;
-                   if (activeSourcesCount <= 0) {
-                        activeSourcesCount = 0;
-                        if (onSpeakingStateChanged) onSpeakingStateChanged(false);
-                        
-                        // Restart timers after TTS finishes, ONLY if still connected
-                        if (isConnected) {
-                            if (isMuted) {
-                                 if (muteTimer) clearTimeout(muteTimer);
-                                 muteTimer = setTimeout(() => playTTSPrompt("I am still muted. Say exactly: Ummm! Anyone there?"), SILENCE_THRESHOLD_MS);
-                            } else {
-                                 if (silenceTimer) clearTimeout(silenceTimer);
-                                 silenceTimer = setTimeout(() => playTTSPrompt("Say exactly: Ummm! Anyone there?"), SILENCE_THRESHOLD_MS);
-                            }
-                        }
-                   }
-                });
-                
-                source.start();
-                sources.add(source);
-            }
-        } catch(e) { console.error("TTS Error", e); }
-    };
+    // PERSISTENT NODES TO PREVENT GARBAGE COLLECTION (AUTO CLOSE FIX)
+    let sourceNode: MediaStreamAudioSourceNode | null = null;
+    let processorNode: ScriptProcessorNode | null = null;
 
     let stream: MediaStream;
     try {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        // Optimized Mic Constraints for Noise Cancellation
+        stream = await navigator.mediaDevices.getUserMedia({ 
+            audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true,
+                channelCount: 1,
+            } 
+        });
     } catch (e) {
         console.error("Microphone access denied", e);
         throw e;
@@ -316,140 +266,87 @@ class GeminiService {
             onopen: () => {
               console.log("Burnit AI Live Connection Opened");
               
-              const source = inputAudioContext.createMediaStreamSource(stream);
-              const scriptProcessor = inputAudioContext.createScriptProcessor(4096, 1, 1);
+              // Create nodes
+              sourceNode = inputAudioContext.createMediaStreamSource(stream);
+              // Reduced buffer size to 2048 for faster response (Latency Fix)
+              processorNode = inputAudioContext.createScriptProcessor(2048, 1, 1);
               
-              scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
-                if (!isConnected) return;
+              processorNode.onaudioprocess = (audioProcessingEvent) => {
                 const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
                 const pcmBlob = createBlob(inputData);
-                
-                // Only send audio if NOT muted
-                if (!isMuted) {
-                    sessionPromise.then((session) => {
-                        session.sendRealtimeInput({ media: pcmBlob });
-                    });
-
-                    // Silence Detection
-                    const currentVolume = calculateRMS(inputData);
-                    if (currentVolume > MIN_VOLUME_THRESHOLD) {
-                        if (silenceTimer) clearTimeout(silenceTimer);
-                        silenceTimer = setTimeout(() => {
-                            if (activeSourcesCount === 0 && !isMuted && isConnected) {
-                                console.log("User AFK. Triggering TTS.");
-                                playTTSPrompt("Ummm! Anyone there?");
-                            }
-                        }, SILENCE_THRESHOLD_MS);
-                    }
-                }
+                sessionPromise.then((session) => {
+                  session.sendRealtimeInput({ media: pcmBlob });
+                });
               };
 
-              source.connect(scriptProcessor);
-              scriptProcessor.connect(inputAudioContext.destination);
-
-              // Initial Silence Timer
-              silenceTimer = setTimeout(() => {
-                  if (activeSourcesCount === 0 && !isMuted && isConnected) {
-                       playTTSPrompt("Ummm! Anyone there?");
-                  }
-              }, SILENCE_THRESHOLD_MS);
+              // Connect nodes
+              sourceNode.connect(processorNode);
+              processorNode.connect(inputAudioContext.destination);
             },
             onmessage: async (message: LiveServerMessage) => {
-              if (!isConnected) return;
-
-              // 1. Capture Transcriptions for History
-              const serverContent = message.serverContent;
-              if (serverContent) {
-                  if (serverContent.outputTranscription?.text) {
-                      currentOutputTranscription += serverContent.outputTranscription.text;
-                  }
-                  if (serverContent.inputTranscription?.text) {
-                      currentInputTranscription += serverContent.inputTranscription.text;
-                  }
-                  
-                  if (serverContent.turnComplete) {
-                      if (currentInputTranscription || currentOutputTranscription) {
-                          try {
-                              const existingJson = localStorage.getItem(HISTORY_KEY);
-                              let history = existingJson ? JSON.parse(existingJson) : [];
-                              if (currentInputTranscription) history.push({ role: 'user', text: currentInputTranscription });
-                              if (currentOutputTranscription) history.push({ role: 'model', text: currentOutputTranscription });
-                              if (history.length > 20) history = history.slice(-20);
-                              localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
-                              currentInputTranscription = '';
-                              currentOutputTranscription = '';
-                          } catch(e) {}
-                      }
-                  }
-              }
-
-              // 2. Interruption Handling
+              // --- INSTANT INTERRUPTION LOGIC ---
               if (message.serverContent?.interrupted) {
+                  console.log("Interruption detected - Muting Output");
+                  
+                  // 1. Mute immediately to kill any lagging sound
+                  outputGainNode.gain.setValueAtTime(0, outputAudioContext.currentTime);
+                  
+                  // 2. Stop all sources
                   for (const source of sources) {
-                      source.stop();
+                      try { source.stop(); } catch(e) {}
                   }
                   sources.clear();
                   nextStartTime = 0;
-                  activeSourcesCount = 0;
-                  if (onSpeakingStateChanged) onSpeakingStateChanged(false);
+                  onSpeakingChange?.(false);
                   
-                  if (silenceTimer) clearTimeout(silenceTimer);
-                  if (muteTimer) clearTimeout(muteTimer);
+                  // 3. Restore volume slightly later for next turn
+                  setTimeout(() => {
+                      outputGainNode.gain.setValueAtTime(1, outputAudioContext.currentTime);
+                  }, 200);
+                  
                   return;
               }
 
-              // 3. Audio Playback
               const base64EncodedAudioString = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
+              
               if (base64EncodedAudioString) {
-                if (silenceTimer) clearTimeout(silenceTimer);
-                if (muteTimer) clearTimeout(muteTimer);
-
                 const audioBuffer = await decodeAudioData(
                   decode(base64EncodedAudioString),
                   outputAudioContext,
                   24000,
                   1,
                 );
+                
+                onAudioData(audioBuffer);
+
+                // Ensure we don't schedule in the past
                 nextStartTime = Math.max(nextStartTime, outputAudioContext.currentTime);
+                
                 const source = outputAudioContext.createBufferSource();
                 source.buffer = audioBuffer;
-                source.connect(outputAudioContext.destination);
+                // Connect to Gain Node instead of Destination directly
+                source.connect(outputGainNode);
                 
                 source.addEventListener('ended', () => {
                   sources.delete(source);
-                  activeSourcesCount--;
-                  if (activeSourcesCount <= 0) {
-                      activeSourcesCount = 0;
-                      if (onSpeakingStateChanged) onSpeakingStateChanged(false);
-
-                      if (isConnected) {
-                          // Restart Timer
-                          if (isMuted) {
-                              if (muteTimer) clearTimeout(muteTimer);
-                              muteTimer = setTimeout(() => playTTSPrompt("I am still muted. Say exactly: Ummm! Anyone there?"), SILENCE_THRESHOLD_MS);
-                          } else {
-                              if (silenceTimer) clearTimeout(silenceTimer);
-                              silenceTimer = setTimeout(() => playTTSPrompt("Say exactly: Ummm! Anyone there?"), SILENCE_THRESHOLD_MS);
-                          }
-                      }
+                  if (sources.size === 0) {
+                      onSpeakingChange?.(false);
                   }
                 });
 
                 source.start(nextStartTime);
                 nextStartTime = nextStartTime + audioBuffer.duration;
                 sources.add(source);
-                
-                activeSourcesCount++;
-                if (onSpeakingStateChanged) onSpeakingStateChanged(true);
+                onSpeakingChange?.(true);
               }
             },
             onerror: (e) => {
                 console.error("Live API Error", e);
-                cleanup();
+                onClose();
             },
             onclose: (e) => {
                 console.log("Live API Closed", e);
-                cleanup();
+                onClose();
             }
           },
           config: {
@@ -457,68 +354,28 @@ class GeminiService {
             speechConfig: {
               voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } },
             },
-            inputAudioTranscription: {}, 
-            outputAudioTranscription: {},
-            systemInstruction: liveSystemInstruction, 
-            tools: [{ googleSearch: {} }], // Added Web Capability
+            systemInstruction: BURNIT_SYSTEM_INSTRUCTION,
+            tools: [{googleSearch: {}}] 
           },
         });
-
-        // Common Cleanup Function
-        const cleanup = () => {
-            isConnected = false;
-            if (silenceTimer) clearTimeout(silenceTimer);
-            if (muteTimer) clearTimeout(muteTimer);
-            
-            // Stop all current audio sources immediately
-            for (const source of sources) {
-                try { source.stop(); } catch(e) {}
-            }
-            sources.clear();
-            
-            // Stop tracks
-            stream.getTracks().forEach(track => track.stop());
-            
-            // Close contexts
-            try { inputAudioContext.close(); } catch(e) {}
-            try { outputAudioContext.close(); } catch(e) {}
-            
-            onClose(); // Update UI
-        };
 
         return {
             disconnect: () => {
                 sessionPromise.then(session => session.close());
-                cleanup();
+                stream.getTracks().forEach(track => track.stop());
+                
+                // Cleanup Audio Nodes explicitly
+                if (sourceNode) sourceNode.disconnect();
+                if (processorNode) processorNode.disconnect();
+                
+                inputAudioContext.close();
+                outputAudioContext.close();
+                onSpeakingChange?.(false);
             },
             toggleMute: (mute: boolean) => {
-                if (!isConnected) return;
-                isMuted = mute;
                 stream.getAudioTracks().forEach(track => track.enabled = !mute);
-                
-                if (mute) {
-                    if (silenceTimer) clearTimeout(silenceTimer);
-                    if (muteTimer) clearTimeout(muteTimer);
-                    
-                    muteTimer = setTimeout(() => {
-                        if (activeSourcesCount === 0 && isConnected) {
-                            console.log("Mute Timeout. TTS Prompt.");
-                            playTTSPrompt("Ummm! Anyone there?");
-                        }
-                    }, SILENCE_THRESHOLD_MS);
-                } else {
-                    if (muteTimer) clearTimeout(muteTimer);
-                    if (silenceTimer) clearTimeout(silenceTimer);
-                    
-                    silenceTimer = setTimeout(() => {
-                         if (activeSourcesCount === 0 && isConnected) {
-                             playTTSPrompt("Ummm! Anyone there?");
-                         }
-                    }, SILENCE_THRESHOLD_MS);
-                }
             },
             sendVideoFrame: (base64Data: string) => {
-                if (!isConnected) return;
                 sessionPromise.then(session => {
                     session.sendRealtimeInput({
                         media: {
@@ -531,7 +388,7 @@ class GeminiService {
         };
     } catch (error) {
         console.error("Failed to establish Live connection", error);
-        stream.getTracks().forEach(track => track.stop());
+        stream.getTracks().forEach(track => track.stop()); 
         throw error;
     }
   }
