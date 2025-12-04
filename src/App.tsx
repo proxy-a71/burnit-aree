@@ -361,7 +361,7 @@ const App: React.FC = () => {
       </div>
   );
 
-  // New Face Component for Live Mode
+  // New Face Component for Live Mode with Background Logo
   const renderBurnitFace = () => (
     <div className="relative flex flex-col items-center justify-center w-full h-full bg-black">
          <div className="relative w-48 h-48 md:w-64 md:h-64 flex items-center justify-center">
@@ -371,15 +371,24 @@ const App: React.FC = () => {
             
             {/* Face Container */}
             <div className="relative z-10 w-32 h-32 md:w-40 md:h-40 bg-black rounded-full border-2 border-burnit-cyan flex flex-col items-center justify-center overflow-hidden shadow-[0_0_30px_rgba(0,240,255,0.5)]">
-                 {/* The Face: -_- */}
-                 <div className="flex flex-col items-center justify-center gap-3">
+                 
+                 {/* Burnit Logo Background (Inside the circle) */}
+                 <img 
+                    src={BURNIT_LOGO_URL} 
+                    className="absolute inset-0 w-full h-full object-cover opacity-30 animate-pulse-slow" 
+                    alt="Burnit Logo Background"
+                    onError={(e) => e.currentTarget.style.display = 'none'}
+                 />
+
+                 {/* The Face: -_- (Overlaid on top) */}
+                 <div className="relative z-20 flex flex-col items-center justify-center gap-3">
                     {/* Eyes */}
                     <div className="flex gap-4">
-                        <div className="w-6 h-1 bg-burnit-cyan rounded-full shadow-[0_0_10px_#00f0ff]"></div>
-                        <div className="w-6 h-1 bg-burnit-cyan rounded-full shadow-[0_0_10px_#00f0ff]"></div>
+                        <div className="w-6 h-1 bg-burnit-cyan rounded-full shadow-[0_0_10px_#00f0ff] drop-shadow-md"></div>
+                        <div className="w-6 h-1 bg-burnit-cyan rounded-full shadow-[0_0_10px_#00f0ff] drop-shadow-md"></div>
                     </div>
                     {/* Mouth */}
-                    <div className={`w-6 bg-burnit-cyan rounded-full shadow-[0_0_10px_#00f0ff] transition-all duration-100 ease-in-out ${isAiSpeaking ? 'h-3' : 'h-1'}`}></div>
+                    <div className={`w-6 bg-burnit-cyan rounded-full shadow-[0_0_10px_#00f0ff] drop-shadow-md transition-all duration-100 ease-in-out ${isAiSpeaking ? 'h-3' : 'h-1'}`}></div>
                  </div>
             </div>
          </div>
@@ -532,7 +541,7 @@ const App: React.FC = () => {
                 <div className="flex-1 flex flex-col md:flex-row gap-4 h-full overflow-hidden">
                     <div className="flex-1 bg-black rounded-2xl border border-white/10 relative overflow-hidden flex flex-col items-center justify-center min-h-[40%]">
                         <div className="absolute top-4 right-4 bg-black/60 px-3 py-1 rounded-full text-xs font-bold text-burnit-cyan border border-burnit-cyan/20 flex items-center gap-2 z-20"><div className="w-2 h-2 bg-burnit-cyan rounded-full animate-pulse"></div>BURNIT AI (HOST)</div>
-                        {/* THE NEW FACE -_- */}
+                        {/* THE NEW FACE -_- WITH LOGO INSIDE */}
                         {renderBurnitFace()}
                     </div>
                     <div className="flex-1 bg-gray-800 dark:bg-[#111] rounded-2xl border border-white/10 relative overflow-hidden flex flex-col items-center justify-center group min-h-[40%]">
