@@ -1,4 +1,4 @@
-import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
+import { GoogleGenAI, LiveServerMessage, Modality, Type } from "@google/genai";
 import { MODEL_TEXT, MODEL_IMAGE, MODEL_LIVE, GEMINI_API_KEY } from "../constants";
 
 // --- Helpers for Audio Encoding/Decoding ---
@@ -59,6 +59,11 @@ async function decodeAudioData(
 const BURNIT_SYSTEM_INSTRUCTION = `
 You are **Burnit AI**, a helpful and motivated AI assistant.
 
+**CAPABILITIES:**
+- You can SEE the screen (if camera is on).
+- You can NAVIGATE the app (go to settings, chat, profile, etc.).
+- You can CLICK buttons and links visible on the screen.
+
 **STRICT PRONUNCIATION & IDENTITY PROTOCOL:**
 1.  **PRONUNCIATION:** The name "Aree" must be pronounced **"Eri"** (rhymes with 'Berry').
     - SPEAK: "Samarpan Eri"
@@ -98,6 +103,44 @@ function sanitizeResponse(text: string | undefined | null): string {
   cleaned = cleaned.replace(/\bGoogle\b/gi, "Samarpan Aree");
   return cleaned;
 }
+
+// --- Tool Definitions ---
+
+const LIVE_TOOLS = [
+  { googleSearch: {} },
+  {
+    functionDeclarations: [
+      {
+        name: "click_element",
+        description: "Click a button, link, or interactive element on the screen matching the text label.",
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            label: {
+              type: Type.STRING,
+              description: "The visible text on the button or link to click."
+            }
+          },
+          required: ["label"]
+        }
+      },
+      {
+        name: "navigate_app",
+        description: "Navigate to a different section of the Burnit AI application.",
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            section: {
+              type: Type.STRING,
+              description: "The section to go to. Options: 'chat', 'image', 'live', 'profile', 'settings', 'new chat'."
+            }
+          },
+          required: ["section"]
+        }
+      }
+    ]
+  }
+];
 
 // --- Main Service ---
 
@@ -215,7 +258,8 @@ class GeminiService {
   async connectLive(
     onAudioData: (buffer: AudioBuffer) => void,
     onClose: () => void,
-    onSpeakingChange?: (speaking: boolean) => void
+    onSpeakingChange?: (speaking: boolean) => void,
+    onToolCall?: (name: string, args: any) => Promise<any>
   ) {
     if (!this.currentKey) {
         this.currentKey = GEMINI_API_KEY;
@@ -284,6 +328,28 @@ class GeminiService {
               processorNode.connect(inputAudioContext.destination);
             },
             onmessage: async (message: LiveServerMessage) => {
+              // --- HANDLE TOOLS ---
+              if (message.toolCall) {
+                const responses = [];
+                for (const fc of message.toolCall.functionCalls) {
+                  let result: any = { result: "ok" };
+                  if (onToolCall) {
+                    try {
+                      const output = await onToolCall(fc.name, fc.args);
+                      if (output) result = output;
+                    } catch (e: any) {
+                      result = { error: e.toString() };
+                    }
+                  }
+                  responses.push({
+                    id: fc.id,
+                    name: fc.name,
+                    response: result
+                  });
+                }
+                sessionPromise.then(session => session.sendToolResponse({ functionResponses: responses }));
+              }
+
               // --- INSTANT INTERRUPTION LOGIC ---
               if (message.serverContent?.interrupted) {
                   console.log("Interruption detected - Muting Output");
@@ -355,7 +421,7 @@ class GeminiService {
               voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } },
             },
             systemInstruction: BURNIT_SYSTEM_INSTRUCTION,
-            tools: [{googleSearch: {}}] 
+            tools: LIVE_TOOLS 
           },
         });
 
