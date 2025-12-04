@@ -240,54 +240,6 @@ const App: React.FC = () => {
     }
   };
 
-  // --- AI TOOL EXECUTION HANDLER ---
-  const handleToolCall = async (name: string, args: any) => {
-    console.log("Burnit AI Executing Tool:", name, args);
-    
-    if (name === 'navigate_app') {
-        const section = args.section?.toLowerCase() || '';
-        if (section.includes('chat') && !section.includes('new')) setMode(AppMode.CHAT);
-        else if (section.includes('image')) setMode(AppMode.IMAGE);
-        else if (section.includes('live')) setMode(AppMode.LIVE);
-        else if (section.includes('profile')) setMode(AppMode.PROFILE);
-        else if (section.includes('setting')) setMode(AppMode.SETTINGS);
-        else if (section.includes('new chat')) createNewChat();
-        else return { result: `Unknown section '${section}'. Try 'chat', 'image', 'live', 'profile', or 'settings'.` };
-        
-        // Return a successful response to the AI so it knows it worked
-        return { result: `Successfully navigated to ${section}.` };
-    }
-
-    if (name === 'click_element') {
-        const label = args.label?.toLowerCase() || '';
-        
-        // 1. Find all clickable elements
-        const targets = Array.from(document.querySelectorAll('button, a, input, [role="button"]'));
-        
-        // 2. Strategy A: Exact text match
-        let best = targets.find(el => el.textContent?.trim().toLowerCase() === label);
-        
-        // 3. Strategy B: Contains text match
-        if (!best) {
-            best = targets.find(el => el.textContent?.toLowerCase().includes(label));
-        }
-        
-        // 4. Strategy C: Aria-Label match (for icons)
-        if (!best) {
-            best = targets.find(el => el.getAttribute('aria-label')?.toLowerCase().includes(label));
-        }
-
-        if (best) {
-            (best as HTMLElement).click();
-            return { result: `Clicked element with label '${args.label}'.` };
-        } else {
-            return { result: `Could not find any button or link labeled '${args.label}' on the current screen.` };
-        }
-    }
-
-    return { result: "Function not implemented on client." };
-  };
-
   const startLiveSession = async () => {
     try {
         await navigator.mediaDevices.getUserMedia({ audio: true }); 
@@ -300,8 +252,7 @@ const App: React.FC = () => {
             },
             (speaking) => {
                 setIsAiSpeaking(speaking);
-            },
-            handleToolCall // Pass the tool handler
+            }
         );
         liveCleanupRef.current = controls;
         setIsLiveConnected(true); 
