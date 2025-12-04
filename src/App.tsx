@@ -107,36 +107,51 @@ const App: React.FC = () => {
 
   useEffect(() => { document.documentElement.classList.toggle('dark', theme === 'dark'); }, [theme]);
 
+  // Video Stream Effect
   useEffect(() => {
-      if (mode === AppMode.LIVE && isLiveConnected && isVideoEnabled) {
-          navigator.mediaDevices.getUserMedia({ video: true })
-            .then(stream => {
-                if (videoRef.current) {
-                    videoRef.current.srcObject = stream;
-                    if (videoIntervalRef.current) clearInterval(videoIntervalRef.current);
-                    const canvas = document.createElement('canvas');
-                    const ctx = canvas.getContext('2d');
-                    videoIntervalRef.current = window.setInterval(() => {
+      let activeStream: MediaStream | null = null;
+
+      const setupStream = async () => {
+          if (mode !== AppMode.LIVE || !isLiveConnected || !isVideoEnabled) return;
+
+          try {
+              activeStream = await navigator.mediaDevices.getUserMedia({ video: true });
+          } catch (e) {
+              console.error("Camera denied", e);
+              setIsVideoEnabled(false);
+              return;
+          }
+
+          if (videoRef.current) {
+              if (activeStream) {
+                   videoRef.current.srcObject = activeStream;
+                   // Start Frame Sending
+                   if (videoIntervalRef.current) clearInterval(videoIntervalRef.current);
+                   const canvas = document.createElement('canvas');
+                   const ctx = canvas.getContext('2d');
+                   
+                   videoIntervalRef.current = window.setInterval(() => {
                         if (videoRef.current && liveCleanupRef.current && ctx) {
-                            canvas.width = videoRef.current.videoWidth || 640;
-                            canvas.height = videoRef.current.videoHeight || 480;
-                            ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+                            canvas.width = 640;
+                            canvas.height = 480;
+                            ctx.drawImage(videoRef.current, 0, 0, 640, 480);
                             const base64Data = canvas.toDataURL('image/jpeg', 0.5).split(',')[1];
                             liveCleanupRef.current.sendVideoFrame(base64Data);
                         }
-                    }, 500);
-                }
-            })
-            .catch(err => { console.error("Camera denied", err); setIsVideoEnabled(false); });
-      } else {
-          if (videoRef.current && videoRef.current.srcObject) {
-              const stream = videoRef.current.srcObject as MediaStream;
-              stream.getTracks().forEach(track => track.stop());
-              videoRef.current.srcObject = null;
+                    }, 500); // 2 FPS
+              } else {
+                  videoRef.current.srcObject = null;
+                  if (videoIntervalRef.current) clearInterval(videoIntervalRef.current);
+              }
           }
-          if (videoIntervalRef.current) { clearInterval(videoIntervalRef.current); videoIntervalRef.current = null; }
-      }
-      return () => { if (videoIntervalRef.current) clearInterval(videoIntervalRef.current); };
+      };
+
+      setupStream();
+
+      return () => {
+          if (videoIntervalRef.current) clearInterval(videoIntervalRef.current);
+          if (activeStream) activeStream.getTracks().forEach(t => t.stop());
+      };
   }, [mode, isLiveConnected, isVideoEnabled]);
 
   const createNewChat = () => {
@@ -227,7 +242,6 @@ const App: React.FC = () => {
         }
       } else {
         const historyForApi = updatedMessages.map(m => ({ role: m.role, parts: [{ text: m.text }] }));
-        // Call updated sendMessage which returns text AND metadata
         const response = await geminiService.sendMessage(historyForApi, newMessage.text, attachData, language);
         
         const botMsg: ChatMessage = { 
@@ -236,7 +250,7 @@ const App: React.FC = () => {
             text: response.text || "No response received.", 
             timestamp: Date.now(), 
             type: 'text',
-            groundingMetadata: response.groundingMetadata // Save search citations
+            groundingMetadata: response.groundingMetadata 
         };
         updateCurrentSession([...updatedMessages, botMsg]);
       }
@@ -252,7 +266,7 @@ const App: React.FC = () => {
 
   const startLiveSession = async () => {
     try {
-        await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+        await navigator.mediaDevices.getUserMedia({ audio: true }); 
         const controls = await geminiService.connectLive(
             (buffer) => {}, 
             () => {
@@ -265,7 +279,8 @@ const App: React.FC = () => {
             }
         );
         liveCleanupRef.current = controls;
-        setIsLiveConnected(true); setIsVideoEnabled(true); 
+        setIsLiveConnected(true); 
+        setIsVideoEnabled(false); 
     } catch (err) {
         console.error(err);
         alert("Failed to connect to Live API. Please check your API Key and Permissions.");
@@ -346,32 +361,27 @@ const App: React.FC = () => {
       </div>
   );
 
-  const renderTalkingAvatar = () => (
-    <div className="relative flex flex-col items-center justify-center w-full h-full">
+  // New Face Component for Live Mode
+  const renderBurnitFace = () => (
+    <div className="relative flex flex-col items-center justify-center w-full h-full bg-black">
          <div className="relative w-48 h-48 md:w-64 md:h-64 flex items-center justify-center">
+            {/* Spinning Rings */}
             <div className={`absolute inset-0 border-2 border-burnit-cyan/30 rounded-full ${isAiSpeaking ? 'animate-spin' : 'animate-spin-slow'} duration-[10s]`}></div>
             <div className="absolute inset-4 border border-burnit-red/30 rounded-full animate-pulse"></div>
             
+            {/* Face Container */}
             <div className="relative z-10 w-32 h-32 md:w-40 md:h-40 bg-black rounded-full border-2 border-burnit-cyan flex flex-col items-center justify-center overflow-hidden shadow-[0_0_30px_rgba(0,240,255,0.5)]">
-                 <img src={BURNIT_LOGO_URL} className="absolute inset-0 w-full h-full object-cover opacity-60 mix-blend-screen" />
-                 
-                 <div className="z-20 flex flex-col items-center gap-4 translate-y-2">
-                     <div className="flex gap-8">
-                         <div className={`w-3 h-1 bg-burnit-cyan shadow-[0_0_10px_#00f0ff] ${isAiSpeaking ? 'h-2' : 'h-1'} transition-all duration-100`}></div>
-                         <div className={`w-3 h-1 bg-burnit-cyan shadow-[0_0_10px_#00f0ff] ${isAiSpeaking ? 'h-2' : 'h-1'} transition-all duration-100`}></div>
-                     </div>
-                     <div className="flex items-center gap-1 h-8 items-center justify-center">
-                        <div className={`w-1 bg-burnit-red rounded-full transition-all duration-75 ${isAiSpeaking ? 'h-6 animate-pulse' : 'h-1'}`}></div>
-                        <div className={`w-1 bg-burnit-red rounded-full transition-all duration-75 delay-75 ${isAiSpeaking ? 'h-8 animate-pulse' : 'h-1'}`}></div>
-                        <div className={`w-1 bg-burnit-red rounded-full transition-all duration-75 delay-100 ${isAiSpeaking ? 'h-4 animate-pulse' : 'h-1'}`}></div>
-                        <div className={`w-1 bg-burnit-red rounded-full transition-all duration-75 delay-75 ${isAiSpeaking ? 'h-8 animate-pulse' : 'h-1'}`}></div>
-                        <div className={`w-1 bg-burnit-red rounded-full transition-all duration-75 ${isAiSpeaking ? 'h-6 animate-pulse' : 'h-1'}`}></div>
-                     </div>
+                 {/* The Face: -_- */}
+                 <div className="flex flex-col items-center justify-center gap-3">
+                    {/* Eyes */}
+                    <div className="flex gap-4">
+                        <div className="w-6 h-1 bg-burnit-cyan rounded-full shadow-[0_0_10px_#00f0ff]"></div>
+                        <div className="w-6 h-1 bg-burnit-cyan rounded-full shadow-[0_0_10px_#00f0ff]"></div>
+                    </div>
+                    {/* Mouth */}
+                    <div className={`w-6 bg-burnit-cyan rounded-full shadow-[0_0_10px_#00f0ff] transition-all duration-100 ease-in-out ${isAiSpeaking ? 'h-3' : 'h-1'}`}></div>
                  </div>
             </div>
-         </div>
-         <div className={`mt-6 text-sm font-bold tracking-[0.2em] ${isAiSpeaking ? 'text-burnit-cyan animate-pulse' : 'text-gray-500'}`}>
-            {isAiSpeaking ? "VOICE TRANSMISSION ACTIVE" : "AWAITING INPUT..."}
          </div>
     </div>
   );
@@ -522,21 +532,22 @@ const App: React.FC = () => {
                 <div className="flex-1 flex flex-col md:flex-row gap-4 h-full overflow-hidden">
                     <div className="flex-1 bg-black rounded-2xl border border-white/10 relative overflow-hidden flex flex-col items-center justify-center min-h-[40%]">
                         <div className="absolute top-4 right-4 bg-black/60 px-3 py-1 rounded-full text-xs font-bold text-burnit-cyan border border-burnit-cyan/20 flex items-center gap-2 z-20"><div className="w-2 h-2 bg-burnit-cyan rounded-full animate-pulse"></div>BURNIT AI (HOST)</div>
-                        {renderTalkingAvatar()}
+                        {/* THE NEW FACE -_- */}
+                        {renderBurnitFace()}
                     </div>
                     <div className="flex-1 bg-gray-800 dark:bg-[#111] rounded-2xl border border-white/10 relative overflow-hidden flex flex-col items-center justify-center group min-h-[40%]">
                         <div className="absolute top-4 right-4 bg-black/60 px-3 py-1 rounded-full text-xs font-bold text-white border border-white/10 z-20">YOU</div>
                         {isMicMuted && (
-                          <div className="absolute top-4 left-4 z-30 pointer-events-none">
-                             <div className="bg-black/60 p-3 rounded-full backdrop-blur-md border border-red-500/50 animate-pulse">
-                                <MicOff className="w-6 h-6 text-red-500" />
+                          <div className="absolute top-14 left-4 z-30 pointer-events-none">
+                             <div className="bg-black/60 p-2 rounded-full backdrop-blur-md border border-red-500/50 animate-pulse">
+                                <MicOff className="w-5 h-5 text-red-500" />
                              </div>
                           </div>
                         )}
-                        {isVideoEnabled ? <video ref={videoRef} autoPlay muted playsInline className="absolute inset-0 w-full h-full object-cover transform scale-x-[-1]" /> : <div className="flex flex-col items-center gap-4"><img src={user.photoURL || PLACEHOLDER_AVATAR} className="w-24 h-24 md:w-32 md:h-32 rounded-full border-4 border-gray-600 dark:border-gray-700 opacity-50" /><p className="text-gray-400 dark:text-gray-500">Camera Off</p></div>}
+                        {isVideoEnabled ? <video ref={videoRef} autoPlay muted playsInline className="absolute inset-0 w-full h-full object-cover" /> : <div className="flex flex-col items-center gap-4"><img src={user.photoURL || PLACEHOLDER_AVATAR} className="w-24 h-24 md:w-32 md:h-32 rounded-full border-4 border-gray-600 dark:border-gray-700 opacity-50" /><p className="text-gray-400 dark:text-gray-500">Camera Off</p></div>}
                     </div>
                 </div>
-                <div className="h-20 shrink-0 bg-[#161616] rounded-2xl border border-white/10 flex items-center justify-center gap-6 px-6 z-20">
+                <div className="h-20 shrink-0 bg-[#161616] rounded-2xl border border-white/10 flex items-center justify-center gap-4 md:gap-6 px-4 z-20">
                     <button onClick={toggleMic} className={`p-4 rounded-full transition-all ${isMicMuted ? 'bg-red-500 hover:bg-red-600 text-white' : 'bg-white/10 hover:bg-white/20 text-white'}`}>{isMicMuted ? <MicOff /> : <Mic />}</button>
                     <button onClick={endLiveSession} className="px-6 py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl transition-all uppercase tracking-wider text-sm md:text-base whitespace-nowrap">End Class</button>
                     <button onClick={() => setIsVideoEnabled(!isVideoEnabled)} className={`p-4 rounded-full transition-all ${!isVideoEnabled ? 'bg-red-500 hover:bg-red-600 text-white' : 'bg-white/10 hover:bg-white/20 text-white'}`}>{!isVideoEnabled ? <VideoOff /> : <Video />}</button>
