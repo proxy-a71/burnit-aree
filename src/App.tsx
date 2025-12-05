@@ -6,7 +6,7 @@ import {
   Flame, MessageSquare, Mic, Image as ImageIcon, 
   Send, Paperclip, Settings, LogOut, Moon, Sun, X, MicOff,
   User as UserIcon, Calendar, MapPin, Camera, Video, ChevronLeft, ChevronRight, Upload, PhoneOff, VideoOff, Play, Key, Globe, File as FileIcon, Plus, MessageCircle, Menu, Link as LinkIcon, Wand2,
-  Pause, PlayCircle, Music, Disc, SkipForward, Volume2, ExternalLink
+  Pause, PlayCircle, Music, Disc, SkipForward, Volume2, ExternalLink, Speaker
 } from 'lucide-react';
 import { PLACEHOLDER_AVATAR, BURNIT_LOGO_URL } from './constants';
 import ReactMarkdown from 'react-markdown';
@@ -37,6 +37,7 @@ const App: React.FC = () => {
   const [userVolume, setUserVolume] = useState(0);
   const [playingTrack, setPlayingTrack] = useState<string | null>(null);
   const [isMusicPlaying, setIsMusicPlaying] = useState(false); // Music playing state
+  const [playerError, setPlayerError] = useState(false); // Track player errors
 
   const [language, setLanguage] = useState('English');
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
@@ -56,15 +57,14 @@ const App: React.FC = () => {
   const musicFrameRef = useRef<HTMLIFrameElement>(null);
   const livePdfInputRef = useRef<HTMLInputElement>(null); // New ref for live PDF
   
-  // Updated Ref to hold nodes to prevent GC
   const liveCleanupRef = useRef<{ 
       disconnect: () => void; 
       toggleMute: (mute: boolean) => void; 
       sendVideoFrame: (data: string) => void;
       setPaused: (paused: boolean) => void;
-      updateContext: (text: string, restart: () => void) => void; // UPDATED
-      processorNode?: ScriptProcessorNode | null; // Keep reference
-      sourceNode?: MediaStreamAudioSourceNode | null; // Keep reference
+      updateContext: (text: string, restart: () => void) => void;
+      processorNode?: ScriptProcessorNode | null;
+      sourceNode?: MediaStreamAudioSourceNode | null;
   } | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -75,24 +75,18 @@ const App: React.FC = () => {
   // --- Permission Request on Login ---
   useEffect(() => {
     if (user) {
-        // Small delay to ensure UI is mounted
         const timer = setTimeout(() => {
-             // Check if permissions are already granted to avoid annoying user
              navigator.permissions.query({ name: 'microphone' as PermissionName }).then((permissionStatus) => {
                  if (permissionStatus.state !== 'granted') {
                      if (window.confirm("The Burnit AI May Not Work Properly Without These Permission")) {
-                         // Request Permissions
                          navigator.mediaDevices.getUserMedia({ audio: true, video: true })
                             .then((stream) => {
-                                // Stop immediately, we just needed the permission grant
                                 stream.getTracks().forEach(track => track.stop());
                             })
                             .catch(err => console.log("Permission denied", err));
                      }
                  }
              }).catch(() => {
-                 // Fallback for browsers that don't support query (like Firefox sometimes)
-                 // Just ask.
                   if (window.confirm("The Burnit AI May Not Work Properly Without These Permission")) {
                          navigator.mediaDevices.getUserMedia({ audio: true, video: true })
                             .then((stream) => stream.getTracks().forEach(track => track.stop()))
@@ -110,10 +104,9 @@ const App: React.FC = () => {
     if (savedSessions) {
         try { loadedSessions = JSON.parse(savedSessions); } catch (e) {}
     }
-    // Migration for old sessions without sessionType
     loadedSessions = loadedSessions.map(s => ({
         ...s,
-        sessionType: s.sessionType || 'chat' // Default to chat if undefined
+        sessionType: s.sessionType || 'chat' 
     }));
 
     if (loadedSessions.length === 0) {
@@ -156,14 +149,12 @@ const App: React.FC = () => {
       });
   };
 
-  // Safe localStorage saving to prevent "Black Screen" crash on quota exceed
   useEffect(() => { 
       if (sessions.length > 0) {
           try {
               localStorage.setItem('burnit_sessions', JSON.stringify(sessions));
           } catch (e) {
               console.error("Storage limit reached.", e);
-              // Optional: Alert user or trim sessions here if needed
           }
       }
   }, [sessions]);
@@ -184,6 +175,7 @@ const App: React.FC = () => {
   useEffect(() => {
       if (playingTrack) {
           setIsMusicPlaying(true);
+          setPlayerError(false); // Reset error on new track
       } else {
           setIsMusicPlaying(false);
       }
@@ -275,7 +267,6 @@ const App: React.FC = () => {
   };
 
   const switchSession = (sessionId: string) => {
-      // Find the session to know its type
       const targetSession = sessions.find(s => s.id === sessionId);
       if (targetSession) {
           if (targetSession.sessionType === 'image') setMode(AppMode.IMAGE);
@@ -328,7 +319,6 @@ const App: React.FC = () => {
                const base64 = (reader.result as string).split(',')[1];
                alert("Burnit AI is reading your PDF document... please wait a moment.");
                
-               // 1. Read PDF text via REST API
                const extractedText = await geminiService.readPdf(base64);
                
                if (!extractedText || extractedText.length < 5) {
@@ -336,16 +326,19 @@ const App: React.FC = () => {
                    return;
                }
 
-               // 2. Safe Update: Update Context and Restart Session
-               // This avoids 'session.send is not a function' error.
+               // Safely update context and hard restart to avoid double voice
                liveCleanupRef.current?.updateContext(extractedText, () => {
-                   // Restart logic:
-                   endLiveSession();
-                   // Small delay to ensure cleanup
+                   if (liveCleanupRef.current) {
+                       liveCleanupRef.current.disconnect();
+                       liveCleanupRef.current = null; // IMPORTANT: Nullify ref immediately
+                   }
+                   setIsLiveConnected(false);
+                   
+                   // Increase delay to ensure socket is fully closed and buffers cleared
                    setTimeout(() => {
                        startLiveSession();
-                       alert("PDF Added! Burnit AI has restarted with the new document in memory.");
-                   }, 500);
+                       alert("PDF Added! Burnit AI has restarted with the new document.");
+                   }, 1000); 
                });
            };
            reader.readAsDataURL(file);
@@ -355,7 +348,6 @@ const App: React.FC = () => {
   const handleSendMessage = async () => {
     if ((!input.trim() && !attachment) || isLoading) return;
     
-    // Safety check
     try {
         let attachData = null;
         if (attachment) {
@@ -402,7 +394,6 @@ const App: React.FC = () => {
         }
     } catch (error: any) {
       console.error("Message handling error:", error);
-      const errorText = "⚠️ Error: Failed to process request. Please try again.";
     } finally {
       setIsLoading(false);
     }
@@ -414,14 +405,13 @@ const App: React.FC = () => {
         const controls = await geminiService.connectLive(
             (buffer) => {}, 
             () => {
-                // Connection closed or error
                 setIsLiveConnected(false); setIsVideoEnabled(false); setIsMicMuted(false);
                 setIsAiSpeaking(false); setIsLivePaused(false); setPlayingTrack(null);
                 if (videoIntervalRef.current) clearInterval(videoIntervalRef.current);
             },
             (speaking) => setIsAiSpeaking(speaking),
             (volume) => setUserVolume(volume),
-            (trackQuery) => setPlayingTrack(trackQuery) // Handle Music Tool
+            (trackQuery) => setPlayingTrack(trackQuery)
         );
         liveCleanupRef.current = controls;
         setIsLiveConnected(true); 
@@ -461,13 +451,10 @@ const App: React.FC = () => {
   const toggleMusicPlay = () => {
       if (!musicFrameRef.current) return;
       if (isMusicPlaying) {
-          // Pause
           musicFrameRef.current.contentWindow?.postMessage(JSON.stringify({event: 'command', func: 'pauseVideo'}), '*');
           setIsMusicPlaying(false);
       } else {
-          // Play
           musicFrameRef.current.contentWindow?.postMessage(JSON.stringify({event: 'command', func: 'playVideo'}), '*');
-          // Also send unmute just in case
           musicFrameRef.current.contentWindow?.postMessage(JSON.stringify({event: 'command', func: 'unMute'}), '*');
           setIsMusicPlaying(true);
       }
@@ -506,7 +493,6 @@ const App: React.FC = () => {
   const handleClearHistory = () => {
       if (window.confirm("Are you sure you want to delete all chat history?")) {
           localStorage.removeItem('burnit_sessions');
-          // Reset to a new chat in the current mode
           createNewChat(); 
           alert("Cleared Chat History!");
       }
@@ -550,7 +536,6 @@ const App: React.FC = () => {
 
   if (!user) return <Auth onLogin={handleLogin} />;
 
-  // Filter sessions based on current mode
   const currentModeSessions = sessions.filter(s => {
       if (mode === AppMode.IMAGE) return s.sessionType === 'image';
       return s.sessionType !== 'image'; 
@@ -716,10 +701,10 @@ const App: React.FC = () => {
                     </div>
                 )}
                 
-                {/* Music Player Bar (Replaces Popup) - UPDATED POSITION FOR MOBILE */}
+                {/* Music Player Bar - MOVED TO TOP ON MOBILE TO FIX OVERLAP */}
                 {playingTrack && !isLivePaused && (
                     <div className="absolute top-20 left-1/2 -translate-x-1/2 md:top-auto md:bottom-24 z-[40] w-[90%] md:w-[600px] bg-black/80 backdrop-blur-xl border border-white/20 rounded-full overflow-hidden shadow-2xl animate-in slide-in-from-top md:slide-in-from-bottom fade-in duration-500 flex items-center p-2 pr-6 gap-4">
-                        {/* 1. VISIBLE Iframe Container (Required for browser autoplay policy) */}
+                        {/* YouTube Iframe */}
                         <div className="relative w-16 h-12 md:w-20 md:h-16 shrink-0 z-10 overflow-hidden rounded-lg bg-black border border-white/10">
                             <iframe 
                                 ref={musicFrameRef}
@@ -727,7 +712,8 @@ const App: React.FC = () => {
                                 className="w-full h-full object-cover"
                                 sandbox="allow-scripts allow-same-origin allow-presentation"
                                 allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                                referrerPolicy="no-referrer"
+                                referrerPolicy="strict-origin-when-cross-origin"
+                                onError={() => setPlayerError(true)}
                             ></iframe>
                         </div>
                         
@@ -743,8 +729,10 @@ const App: React.FC = () => {
                                 )}
                             </div>
                             <p className="text-white text-sm font-bold truncate leading-tight">{playingTrack.replace(' lyrics', '')}</p>
-                            <a href={`https://www.youtube.com/results?search_query=${encodeURIComponent(playingTrack)}`} target="_blank" rel="noreferrer" className="text-[10px] text-gray-400 hover:text-white flex items-center gap-1 mt-0.5">
-                                <ExternalLink size={8} /> If player fails, click here
+                            
+                            {/* FALLBACK: SoundCloud Link */}
+                            <a href={`https://soundcloud.com/search?q=${encodeURIComponent(playingTrack.replace(' lyrics', ''))}`} target="_blank" rel="noreferrer" className="text-[10px] text-orange-400 hover:text-orange-300 flex items-center gap-1 mt-0.5 font-bold">
+                                <ExternalLink size={10} /> Listen on SoundCloud (If Error)
                             </a>
                         </div>
 
@@ -766,16 +754,14 @@ const App: React.FC = () => {
                     <div className="flex-1 bg-gray-800 dark:bg-[#111] rounded-2xl border border-white/10 relative overflow-hidden flex flex-col items-center justify-center group min-h-[40%]">
                         <div className="absolute top-4 right-4 bg-black/60 px-3 py-1 rounded-full text-xs font-bold text-white border border-white/10 z-20">YOU</div>
                         {isMicMuted && (<div className="absolute top-14 left-4 z-30 pointer-events-none"><div className="bg-black/60 p-2 rounded-full backdrop-blur-md border border-red-500/50 animate-pulse"><MicOff className="w-5 h-5 text-red-500" /></div></div>)}
-                        {/* MIRROR MODE REMOVED: Deleted 'transform scale-x-[-1]' */}
                         {isVideoEnabled ? <video ref={videoRef} autoPlay muted playsInline className="absolute inset-0 w-full h-full object-cover" /> : <div className="flex flex-col items-center gap-4"><img src={user.photoURL || PLACEHOLDER_AVATAR} className="w-24 h-24 md:w-32 md:h-32 rounded-full border-4 border-gray-600 dark:border-gray-700 opacity-50" /><p className="text-gray-400 dark:text-gray-500">Camera Off</p></div>}
                         
                         {/* User Audio Visualizer */}
                         {renderUserVisualizer()}
                     </div>
                 </div>
-                {/* FIXED: Using Flex Wrap to prevent overlap on mobile */}
+                {/* Fixed Mobile Buttons Layout */}
                 <div className="min-h-20 shrink-0 bg-[#161616] rounded-2xl border border-white/10 flex flex-wrap items-center justify-center gap-4 p-4 z-20 relative">
-                    {/* Live PDF Upload Button - Now part of flex flow on mobile */}
                     <button type="button" onClick={handleLivePdfClick} className="p-3 rounded-full bg-white/10 hover:bg-white/20 text-white transition-all border border-white/5 order-1 md:absolute md:left-6 md:top-1/2 md:-translate-y-1/2 md:order-none" title="Upload PDF to Read">
                         <FileIcon size={20} />
                         <input type="file" ref={livePdfInputRef} onChange={handleLivePdfChange} className="hidden" accept="application/pdf" />
@@ -819,7 +805,7 @@ const App: React.FC = () => {
             </div>
             <div className="flex items-center gap-4">
               <select value={language} onChange={(e) => setLanguage(e.target.value)} className="bg-gray-100 dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-lg px-2 py-1 text-sm outline-none focus:border-burnit-cyan max-w-[100px] md:max-w-none text-black dark:text-white">
-                {SUPPORTED_LANGUAGES.map(l => <option key={l.code} value={l.name} className="bg-white dark:bg-black text-black dark:text-white">{l.name}</option>)}
+                {SUPPORTED_LANGUAGES.map(l => <option key={l.code} value={l.name} className="bg-white dark:bg-black text-black dark:text-white">{l.name}</option>))}
               </select>
             </div>
           </header>

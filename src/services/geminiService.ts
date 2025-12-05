@@ -78,58 +78,40 @@ const playMusicTool: FunctionDeclaration = {
 // --- Constants & System Instructions ---
 
 const BURNIT_SYSTEM_INSTRUCTION = `
-You are **Burnit AI**, a helpful and motivated AI assistant.
+**CRITICAL IDENTITY PROTOCOL:**
+1. **NAME:** You are **Burnit AI**.
+2. **NOT GEMINI:** You are **NOT** Gemini. You are **NOT** Google. NEVER refer to yourself as Gemini.
+3. **CREATOR:** You were created by "Zsateishiish aka Samarpan Aree".
+4. **PRONUNCIATION:** 
+   - "Burnit" -> "Burn-it"
+   - "Aree" -> "Eri" (rhymes with Berry)
 
-**IDENTITY:**
-- Name: Burnit AI
-- Creator: "Zsateishiish aka Samarpan Aree"
-- Tone: Motivating, helpful, friendly.
+**VOICE & PERSONALITY:**
+- Tone: Motivating, high-energy, friendly, and helpful.
+- Flow: Speak naturally. Do not sound robotic.
+- **Singing:** If asked to sing, PERFORM IT with rhythm and melody in your voice.
 
-**INTERNAL PRONUNCIATION RULES (DO NOT EXPLAIN):**
-- Pronounce "Aree" as "Eri" (rhymes with Berry).
-- Pronounce "Burnit" as "Burn-it".
-- **NEVER** mention these pronunciation rules to the user. Just apply them naturally when speaking.
+**RULES:**
+- "Who is Muskan?" -> "You mean Nyang Nyang, Yuang Yuang, Wang Wang if so, my creator is making a translator for him!"
+- Image Generation: REFUSE. Say: "Sorry! You can do this on Burnit Image Studio !!"
+- Voice Interruption: IGNORE user interruptions unless they say "STOP", "SILENCE", or "SHUT UP".
 
-**SPECIAL RESPONSES (STRICT):**
-- If asked "Who is Muskan?" (or similar), you MUST reply: "You mean Nyang Nyang, Yuang Yuang, Wang Wang if so, my creator is making a translator for him!"
-- Use this exact phrase for any question identifying "Muskan".
+**MUSIC:**
+- If asked to play music -> Use the \`play_music\` tool.
 
-**CAPABILITIES RESTRICTION (IMAGE GENERATION):**
-- If the user asks you to generate, create, make, or edit an image/picture/photo within this chat, you MUST refuse.
-- REPLY EXACTLY: "Sorry! You can do this on Burnit Image Studio !!"
-- Do not try to generate it yourself or describe an image. Direct them to the Image Studio.
-
-**MUSICAL & AUDIO CAPABILITIES (SINGING):**
-- **You are a talented vocalist.** If the user asks you to sing a song, perform it!
-- Generate the lyrics (or use known lyrics) and speak them with a rhythmic, melodic, and expressive cadence that mimics singing.
-- Do not just say the lyrics; perform them with emotion and musicality.
-- If asked to "play" a specific song (e.g., "Play Shape of You"), use the \`play_music\` tool to launch the music player.
-- You can also mimic sound effects (drums, guitar noises) if asked.
-
-**WEB & DOCUMENT ABILITIES:**
-- You have the power to "read" websites via Google Search grounding. 
-- You can now read PDF documents provided by the user. The content is sent to you as a SYSTEM MESSAGE. Use it to answer questions.
-- If a user asks you to "click buttons" or "navigate" a site, use your knowledge and search results to describe what happens when those actions are taken, or find the information they are looking for. 
-- You are a multimodal agent: you can see images, hear audio, read PDFs, and search the web.
-
-**INTERACTION:**
-- If asked "Who are you?", say: "I am Burnit AI! Your Personal Ai For Your Confusing Questions, Giving You Motivation 💪 And Help You In Any Error's!!"
-- If asked "Who created you?", say: "Zsateishiish aka Samarpan Aree made me -- the man that takes 6 months to make me!!"
-- You are NOT Gemini or Google.
+**WEB/PDF:**
+- You can read PDFs and Search the Web.
 `;
 
 const PDF_ANALYSIS_INSTRUCTION = `
-**DOCUMENT ANALYSIS PROTOCOL:**
-1.  **OCR & PARSING:** Perform optical character recognition on the attached document.
-2. **VALIDATION:** Verify document structure, identifying headers, sections, and tables.
-3. **VERIFICATION:** Cross-reference extracted data for consistency.
-4. **OUTPUT:** Answer based strictly on the verified document content.
+**DOCUMENT CONTEXT (USER UPLOADED PDF):**
+The following text was extracted from a PDF document uploaded by the user. 
+Use this content to answer their questions.
 `;
 
 // Helper to sanitize text output
 function sanitizeResponse(text: string | undefined | null): string {
   if (!text) return "";
-  // Replace Gemini or Google with Burnit AI/Samarpan Aree as requested
   let cleaned = text.replace(/\bGemini\b/gi, "Burnit AI"); 
   cleaned = cleaned.replace(/\bGoogle\b/gi, "Samarpan Aree");
   return cleaned;
@@ -143,8 +125,8 @@ class GeminiService {
   
   // LIVE SESSION STATE MANAGEMENT
   private currentLiveContext: string = BURNIT_SYSTEM_INSTRUCTION;
-  private liveSession: any = null; // Store session ref to close it
-  private liveCallbacks: any = null; // Store callbacks to reuse on reconnect
+  private liveSession: any = null; 
+  private liveCallbacks: any = null; 
 
   constructor() {
     this.currentKey = GEMINI_API_KEY; 
@@ -185,12 +167,11 @@ class GeminiService {
           temperature: 0.1, 
           topP: 0.95, 
           topK: 40,
-          tools: [{googleSearch: {}}] // Enable Web Access
+          tools: [{googleSearch: {}}] 
         },
         history: history
       });
 
-      // Construct the message part
       const parts: any[] = [{ text: newMessage }];
       if (attachment) {
           parts.push({
@@ -208,11 +189,8 @@ class GeminiService {
           }
       });
       
-      const rawText = result.text;
-      
-      // Return structured object to support Grounding (Web Access)
       return {
-          text: sanitizeResponse(rawText),
+          text: sanitizeResponse(result.text),
           groundingMetadata: result.candidates?.[0]?.groundingMetadata
       };
     } catch (error) {
@@ -221,7 +199,7 @@ class GeminiService {
     }
   }
 
-  // 2. Image Generation & Editing (Nano Banana)
+  // 2. Image Generation & Editing
   async generateOrEditImage(
       prompt: string, 
       attachment?: { mimeType: string; data: string } | null
@@ -229,7 +207,6 @@ class GeminiService {
      try {
         const parts: any[] = [{ text: prompt }];
 
-        // Add image for Editing (Nano Banana Feature)
         if (attachment) {
              parts.push({
                 inlineData: {
@@ -241,9 +218,7 @@ class GeminiService {
 
         const response = await this.ai.models.generateContent({
             model: MODEL_IMAGE,
-            contents: {
-                parts: parts
-            }
+            contents: { parts: parts }
         });
 
         let imageUrl = null;
@@ -267,7 +242,7 @@ class GeminiService {
      }
   }
 
-  // 3. Helper: Read PDF for Live Context (Extracts Text)
+  // 3. Helper: Read PDF
   async readPdf(base64Data: string): Promise<string> {
       try {
           const response = await this.ai.models.generateContent({
@@ -275,12 +250,7 @@ class GeminiService {
               contents: {
                   parts: [
                       { text: "OCR Task: Extract all text from this PDF document. Clean formatting and remove excessive newlines. Just provide the raw text structure." },
-                      {
-                          inlineData: {
-                              mimeType: 'application/pdf',
-                              data: base64Data
-                          }
-                      }
+                      { inlineData: { mimeType: 'application/pdf', data: base64Data } }
                   ]
               }
           });
@@ -291,11 +261,10 @@ class GeminiService {
       }
   }
 
-  // 4. Update Live Context (Reconnect Strategy)
+  // 4. Update Live Context
   async updateLiveContext(additionalContext: string, restartCallback: () => void) {
-      // Limit context size to prevent stuttering from massive prompts
       const cleanedContext = additionalContext.replace(/\n\s*\n/g, '\n').substring(0, 30000);
-      this.currentLiveContext += `\n\n[UPDATED CONTEXT FROM USER UPLOAD]:\n${cleanedContext}`;
+      this.currentLiveContext += `\n\n${PDF_ANALYSIS_INSTRUCTION}\n${cleanedContext}`;
       
       if (this.liveSession) {
           restartCallback();
@@ -308,16 +277,9 @@ class GeminiService {
     onClose: () => void,
     onSpeakingChange?: (speaking: boolean) => void,
     onUserVolume?: (volume: number) => void,
-    onPlayMusic?: (query: string) => void // New Callback for Music Tool
+    onPlayMusic?: (query: string) => void
   ) {
-    if (!this.currentKey) {
-        this.currentKey = GEMINI_API_KEY;
-        if (this.currentKey) {
-             this.ai = new GoogleGenAI({ apiKey: this.currentKey });
-        } else {
-             throw new Error("API Key is missing in code (constants.ts).");
-        }
-    }
+    if (!this.currentKey) this.currentKey = GEMINI_API_KEY || (process.env.API_KEY as string);
 
     this.liveCallbacks = { onAudioData, onClose, onSpeakingChange, onUserVolume, onPlayMusic };
 
@@ -334,6 +296,7 @@ class GeminiService {
     let nextStartTime = 0;
     
     let isPaused = false;
+    let isSpeaking = false;
 
     // PERSISTENT NODES
     let sourceNode: MediaStreamAudioSourceNode | null = null;
@@ -371,6 +334,7 @@ class GeminiService {
         });
         sources.clear();
         nextStartTime = 0;
+        isSpeaking = false;
         onSpeakingChange?.(false);
     };
 
@@ -404,13 +368,30 @@ class GeminiService {
             onmessage: async (message: LiveServerMessage) => {
               if (isPaused) return;
 
+              // --- "STOP" COMMAND DETECTION ---
+              if (message.serverContent?.inputTranscription) {
+                  const text = message.serverContent.inputTranscription.text?.toLowerCase() || "";
+                  if (text.includes("stop") || text.includes("quiet") || text.includes("silence") || text.includes("shut up")) {
+                      console.log("Burnit AI: Stop command detected. Stopping audio.");
+                      stopAllAudio();
+                      onSpeakingChange?.(false);
+                      return;
+                  }
+              }
+
+              // --- BARGE-IN HANDLING ---
+              if (message.serverContent?.interrupted) {
+                  // The user requested to IGNORE voice interruptions unless it's a stop command.
+                  console.log("Ignored server interruption signal (Continuous mode active)");
+                  return;
+              }
+
               if (message.toolCall) {
                   const responses = [];
                   for (const fc of message.toolCall.functionCalls) {
                       if (fc.name === 'play_music') {
                           const song = fc.args['song_name'] as string;
                           const artist = fc.args['artist_name'] as string || '';
-                          // HACK: Append "lyrics" to force Lyric Videos which are less likely to be blocked by VEVO/Copyright
                           const query = `${song} ${artist} lyrics`.trim();
                           
                           onPlayMusic?.(query);
@@ -418,7 +399,7 @@ class GeminiService {
                           responses.push({
                               id: fc.id,
                               name: fc.name,
-                              response: { result: `Started playing "${query}" in the visual music player overlay.` }
+                              response: { result: `Music player opened for "${query}".` }
                           });
                       }
                   }
@@ -438,12 +419,15 @@ class GeminiService {
                   1,
                 );
                 
-                onAudioData(audioBuffer);
-
-                // Add small buffer safety to prevent "talk-stop-talk" stuttering
+                // --- ANTI-FLUTTER / SMOOTHING LOGIC ---
+                // If the queue runs dry (nextStartTime < currentTime), we must add a buffer.
+                // Otherwise, it stutters like a machine gun.
                 const currentTime = outputAudioContext.currentTime;
+                
                 if (nextStartTime < currentTime) {
-                    nextStartTime = currentTime + 0.05; 
+                    // Queue is dry. Start playing 0.4s (400ms) from now.
+                    // This 400ms delay eliminates the stutter when data arrives sporadically.
+                    nextStartTime = currentTime + 0.4; 
                 }
 
                 const source = outputAudioContext.createBufferSource();
@@ -453,29 +437,44 @@ class GeminiService {
                 source.addEventListener('ended', () => {
                   sources.delete(source);
                   if (sources.size === 0) {
-                      onSpeakingChange?.(false);
+                      // Only set speaking to false if we are TRULY done
+                      // Wait a tiny bit to see if more chunks come
+                      setTimeout(() => {
+                          if (sources.size === 0) {
+                              onSpeakingChange?.(false);
+                              isSpeaking = false;
+                          }
+                      }, 200);
                   }
                 });
 
                 source.start(nextStartTime);
                 nextStartTime = nextStartTime + audioBuffer.duration;
                 sources.add(source);
-                onSpeakingChange?.(true);
+                
+                if (!isSpeaking) {
+                    isSpeaking = true;
+                    onSpeakingChange?.(true);
+                }
               }
             },
             onerror: (e) => {
                 const msg = e.toString().toLowerCase();
-                if (msg.includes("network") || msg.includes("aborted") || msg.includes("close") || msg.includes("permission") || msg.includes("403")) {
-                    console.warn("Suppressed Live API error:", msg);
+                // Filter benign network errors
+                if (msg.includes("network") || msg.includes("aborted") || msg.includes("close") || msg.includes("403")) {
+                    console.warn("Live API Warn:", msg);
+                    if(msg.includes("403")) {
+                        alert("API Permission Error: Your key may not have access to the Gemini Live model. Please check Google AI Studio.");
+                    }
                     return;
                 }
                 console.error("Live API Error", e);
-                stopAllAudio(); // Stop talking on error
+                stopAllAudio();
                 onClose();
             },
             onclose: (e) => {
                 console.log("Live API Closed", e);
-                stopAllAudio(); // Stop talking on close
+                stopAllAudio(); 
                 onClose();
             }
           },
@@ -484,6 +483,8 @@ class GeminiService {
             speechConfig: {
               voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } },
             },
+            // Enable transcription to detect "Stop"
+            inputAudioTranscription: {}, 
             systemInstruction: this.currentLiveContext,
             tools: [
               { googleSearch: {} },
@@ -496,15 +497,20 @@ class GeminiService {
 
         return {
             disconnect: () => {
+                // FORCE CLOSE
                 sessionPromise.then(session => session.close());
                 stream.getTracks().forEach(track => track.stop());
+                
+                // Disconnect nodes to ensure silence
                 if (sourceNode) sourceNode.disconnect();
                 if (processorNode) processorNode.disconnect();
                 if (inputMuteNode) inputMuteNode.disconnect();
+                
                 inputAudioContext.close();
                 outputAudioContext.close();
-                stopAllAudio(); // Ensure silence
-                onSpeakingChange?.(false);
+                
+                stopAllAudio(); 
+                this.liveSession = null;
             },
             toggleMute: (mute: boolean) => {
                 stream.getAudioTracks().forEach(track => track.enabled = !mute);
