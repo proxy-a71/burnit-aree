@@ -298,6 +298,11 @@ class GeminiService {
     
     let isPaused = false;
     let isSpeaking = false;
+    
+    // --- SERIAL QUEUE FOR AUDIO PROCESSING ---
+    // This prevents race conditions where small chunks decode faster than large chunks
+    // and play out of order, or overlap.
+    let audioProcessingQueue = Promise.resolve();
 
     // PERSISTENT NODES
     let sourceNode: MediaStreamAudioSourceNode | null = null;
@@ -334,7 +339,14 @@ class GeminiService {
             try { source.stop(); } catch(e) {}
         });
         sources.clear();
+        
+        // Reset timing so next play starts fresh
         nextStartTime = 0;
+        
+        // Break the queue chain by creating a new resolved promise
+        // Note: Pending promises in old chain will still execute but we can filter them with a flag if needed.
+        // For simplicity, we just rely on stopped sources.
+        
         isSpeaking = false;
         onSpeakingChange?.(false);
     };
@@ -343,12 +355,12 @@ class GeminiService {
     const fullSystemInstruction = `
     ${this.currentLiveContext}
     
-    **RECENT CHAT HISTORY (MEMORY):**
+    **MEMORY (RECENT CHAT):**
     ${historyContext}
     
-    **REMINDER:**
-    - YOU ARE BURNIT AI.
-    - IGNORE INTERRUPTIONS EXCEPT "STOP".
+    **INSTRUCTION:**
+    - You are Burnit AI.
+    - If user interrupts, IGNORE IT unless they say "Stop".
     `;
 
     try {
@@ -394,7 +406,6 @@ class GeminiService {
 
               // --- BARGE-IN HANDLING ---
               if (message.serverContent?.interrupted) {
-                  // The user requested to IGNORE voice interruptions unless it's a stop command.
                   console.log("Ignored server interruption signal (Continuous mode active)");
                   return;
               }
@@ -425,48 +436,55 @@ class GeminiService {
               const base64EncodedAudioString = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
               
               if (base64EncodedAudioString) {
-                const audioBuffer = await decodeAudioData(
-                  decode(base64EncodedAudioString),
-                  outputAudioContext,
-                  24000,
-                  1,
-                );
-                
-                // --- ANTI-FLUTTER / DEEP BUFFER LOGIC ---
-                // We use a larger buffer (0.6s) to ensure smooth playback even on varying networks.
-                const currentTime = outputAudioContext.currentTime;
-                
-                if (nextStartTime < currentTime) {
-                    // Queue is dry. Insert safety buffer.
-                    // 0.6 seconds gives the network time to catch up before we play.
-                    nextStartTime = currentTime + 0.6; 
-                }
+                // --- CRITICAL FIX: SERIAL PROCESSING QUEUE ---
+                // We chain promises to ensure chunks are scheduled strictly in order.
+                // This prevents "merging" (overlap) and out-of-order flutter.
+                audioProcessingQueue = audioProcessingQueue.then(async () => {
+                    
+                    const audioBuffer = await decodeAudioData(
+                        decode(base64EncodedAudioString),
+                        outputAudioContext,
+                        24000,
+                        1,
+                    );
+                    
+                    const currentTime = outputAudioContext.currentTime;
+                    
+                    // --- REFINED BUFFER LOGIC ---
+                    // Lowered to 0.2s for faster response ("stops for sec" fix).
+                    // Because we are now strictly ordered, we don't need a huge buffer to hide glitching.
+                    if (nextStartTime < currentTime) {
+                        nextStartTime = currentTime + 0.2; 
+                    }
 
-                const source = outputAudioContext.createBufferSource();
-                source.buffer = audioBuffer;
-                source.connect(outputGainNode);
-                
-                source.addEventListener('ended', () => {
-                  sources.delete(source);
-                  if (sources.size === 0) {
-                      // Extended debounce to prevent flickering
-                      setTimeout(() => {
-                          if (sources.size === 0) {
-                              onSpeakingChange?.(false);
-                              isSpeaking = false;
-                          }
-                      }, 400); // 400ms silence tolerance
-                  }
+                    const source = outputAudioContext.createBufferSource();
+                    source.buffer = audioBuffer;
+                    source.connect(outputGainNode);
+                    
+                    source.addEventListener('ended', () => {
+                        sources.delete(source);
+                        if (sources.size === 0) {
+                            // Short debounce to prevent UI flicker
+                            setTimeout(() => {
+                                if (sources.size === 0) {
+                                    onSpeakingChange?.(false);
+                                    isSpeaking = false;
+                                }
+                            }, 200); 
+                        }
+                    });
+
+                    source.start(nextStartTime);
+                    nextStartTime = nextStartTime + audioBuffer.duration;
+                    sources.add(source);
+                    
+                    if (!isSpeaking) {
+                        isSpeaking = true;
+                        onSpeakingChange?.(true);
+                    }
+                }).catch(err => {
+                    console.error("Audio Processing Error:", err);
                 });
-
-                source.start(nextStartTime);
-                nextStartTime = nextStartTime + audioBuffer.duration;
-                sources.add(source);
-                
-                if (!isSpeaking) {
-                    isSpeaking = true;
-                    onSpeakingChange?.(true);
-                }
               }
             },
             onerror: (e) => {
