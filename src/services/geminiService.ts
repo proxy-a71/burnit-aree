@@ -273,6 +273,7 @@ class GeminiService {
 
   // 5. Live API Connection
   async connectLive(
+    historyContext: string, // NEW: Pass chat history here
     onAudioData: (buffer: AudioBuffer) => void,
     onClose: () => void,
     onSpeakingChange?: (speaking: boolean) => void,
@@ -337,6 +338,18 @@ class GeminiService {
         isSpeaking = false;
         onSpeakingChange?.(false);
     };
+
+    // Combine Base Context + Chat History + Identity Reinforcement
+    const fullSystemInstruction = `
+    ${this.currentLiveContext}
+    
+    **RECENT CHAT HISTORY (MEMORY):**
+    ${historyContext}
+    
+    **REMINDER:**
+    - YOU ARE BURNIT AI.
+    - IGNORE INTERRUPTIONS EXCEPT "STOP".
+    `;
 
     try {
         const sessionPromise = this.ai.live.connect({
@@ -419,15 +432,14 @@ class GeminiService {
                   1,
                 );
                 
-                // --- ANTI-FLUTTER / SMOOTHING LOGIC ---
-                // If the queue runs dry (nextStartTime < currentTime), we must add a buffer.
-                // Otherwise, it stutters like a machine gun.
+                // --- ANTI-FLUTTER / DEEP BUFFER LOGIC ---
+                // We use a larger buffer (0.6s) to ensure smooth playback even on varying networks.
                 const currentTime = outputAudioContext.currentTime;
                 
                 if (nextStartTime < currentTime) {
-                    // Queue is dry. Start playing 0.4s (400ms) from now.
-                    // This 400ms delay eliminates the stutter when data arrives sporadically.
-                    nextStartTime = currentTime + 0.4; 
+                    // Queue is dry. Insert safety buffer.
+                    // 0.6 seconds gives the network time to catch up before we play.
+                    nextStartTime = currentTime + 0.6; 
                 }
 
                 const source = outputAudioContext.createBufferSource();
@@ -437,14 +449,13 @@ class GeminiService {
                 source.addEventListener('ended', () => {
                   sources.delete(source);
                   if (sources.size === 0) {
-                      // Only set speaking to false if we are TRULY done
-                      // Wait a tiny bit to see if more chunks come
+                      // Extended debounce to prevent flickering
                       setTimeout(() => {
                           if (sources.size === 0) {
                               onSpeakingChange?.(false);
                               isSpeaking = false;
                           }
-                      }, 200);
+                      }, 400); // 400ms silence tolerance
                   }
                 });
 
@@ -485,7 +496,7 @@ class GeminiService {
             },
             // Enable transcription to detect "Stop"
             inputAudioTranscription: {}, 
-            systemInstruction: this.currentLiveContext,
+            systemInstruction: fullSystemInstruction,
             tools: [
               { googleSearch: {} },
               { functionDeclarations: [playMusicTool] } 

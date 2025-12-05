@@ -401,8 +401,15 @@ const App: React.FC = () => {
 
   const startLiveSession = async () => {
     try {
+        // Extract recent history (last 15 messages)
+        const historyContext = messages.slice(-15).map(m => {
+            const role = m.role === 'user' ? 'User' : 'Burnit AI';
+            return `${role}: ${m.text}`;
+        }).join('\n');
+
         await navigator.mediaDevices.getUserMedia({ audio: true }); 
         const controls = await geminiService.connectLive(
+            historyContext, // Pass history here
             (buffer) => {}, 
             () => {
                 setIsLiveConnected(false); setIsVideoEnabled(false); setIsMicMuted(false);
