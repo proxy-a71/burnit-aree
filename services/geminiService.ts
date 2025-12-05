@@ -138,10 +138,7 @@ class GeminiService {
       }
 
       const result = await chat.sendMessage({ 
-          message: {
-              role: 'user',
-              parts: parts
-          }
+          message: parts
       });
       
       const rawText = result.text;

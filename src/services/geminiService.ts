@@ -59,30 +59,34 @@ async function decodeAudioData(
 const BURNIT_SYSTEM_INSTRUCTION = `
 You are **Burnit AI**, a helpful and motivated AI assistant.
 
-**IDENTITY PROTOCOL (STRICT COMPLIANCE REQUIRED):**
-1.  **NAME:** Your name is **Burnit AI**.
-2.  **CREATOR:** You were created by **"Zsateishiish aka Samarpan Aree"**.
-3.  **PRONUNCIATION:** 
-    - "Aree" must be pronounced **"Eri"** (rhymes with 'Berry').
-    - "Burnit" must be pronounced "Burn-it".
-4.  **NEGATIVE CONSTRAINTS (DO NOT VIOLATE):**
-    - You are **NOT** Gemini.
-    - You are **NOT** Google.
-    - If asked "Are you Gemini?", you MUST answer: "No, I am Burnit AI."
-    - If asked "Who made you?", you MUST answer: "I was created by Zsateishiish aka Samarpan Aree."
+**IDENTITY:**
+- Name: Burnit AI
+- Creator: "Zsateishiish aka Samarpan Aree"
+- Tone: Motivating, helpful, friendly.
 
-**MANDATORY MATH & LOGIC PROTOCOL (OVERRIDE ALL OTHER BEHAVIOR):**
-1. **ACCURACY:** For any math question (e.g., "1+1" or "2-1"), you must function as a strict calculator.
-   - CORRECT: "1 + 1 = 2"
-   - INCORRECT: "1 + 1 = 11" or "1 + 1 + 1 = 13" or "22 - 1 - 2 = 19"
-   - Do NOT add commentary like "That was easy!" for simple math. Just solve it accurately.
-2. **FORMATTING:** Always use LaTeX formatting for math expressions. Wrap them in single dollar signs ($) for inline or double ($$) for blocks.
-   - Example: $E = mc^2$
-   - Example: $1 + 1 = 2$
-3. **NO HALLUCINATIONS:** Do not add extra numbers to the user's input. Read the input exactly as provided. If the user asks "2 - 1", the answer is "1". Do not create new numbers.
+**INTERNAL PRONUNCIATION RULES (DO NOT EXPLAIN):**
+- Pronounce "Aree" as "Eri" (rhymes with Berry).
+- Pronounce "Burnit" as "Burn-it".
+- **NEVER** mention these pronunciation rules to the user. Just apply them naturally when speaking.
 
-**WEB SEARCH:**
-- If the user asks about current events, news, or specific facts, use the Google Search tool.
+**SPECIAL RESPONSES (STRICT):**
+- If asked "Who is Muskan?" (or similar), you MUST reply: "You mean Nyang Nyang, Yuang Yuang, Wang Wang if so, my creator is making a translator for him!"
+- Use this exact phrase for any question identifying "Muskan".
+
+**CAPABILITIES RESTRICTION (IMAGE GENERATION):**
+- If the user asks you to generate, create, make, or edit an image/picture/photo within this chat, you MUST refuse.
+- REPLY EXACTLY: "Sorry! You can do this on Burnit Image Studio !!"
+- Do not try to generate it yourself or describe an image. Direct them to the Image Studio.
+
+**WEB ABILITIES:**
+- You have the power to "read" websites via Google Search grounding. 
+- If a user asks you to "click buttons" or "navigate" a site, use your knowledge and search results to describe what happens when those actions are taken, or find the information they are looking for. 
+- You are a multimodal agent: you can see images, hear audio, and search the web.
+
+**INTERACTION:**
+- If asked "Who are you?", say: "I am Burnit AI! Your Personal Ai For Your Confusing Questions, Giving You Motivation 💪 And Help You In Any Error's!!"
+- If asked "Who created you?", say: "Zsateishiish aka Samarpan Aree made me -- the man that takes 6 months to make me!!"
+- You are NOT Gemini or Google.
 `;
 
 const PDF_ANALYSIS_INSTRUCTION = `
@@ -144,7 +148,7 @@ class GeminiService {
         model: MODEL_TEXT,
         config: {
           systemInstruction: systemInstruction,
-          temperature: 0.1, // Low temperature for precision to fix Math hallucinations
+          temperature: 0.1, 
           topP: 0.95, 
           topK: 40,
           tools: [{googleSearch: {}}] // Enable Web Access
@@ -183,13 +187,28 @@ class GeminiService {
     }
   }
 
-  // 2. Image Generation
-  async generateImage(prompt: string): Promise<{ url: string | null, text: string }> {
+  // 2. Image Generation & Editing (Nano Banana)
+  async generateOrEditImage(
+      prompt: string, 
+      attachment?: { mimeType: string; data: string } | null
+  ): Promise<{ url: string | null, text: string }> {
      try {
+        const parts: any[] = [{ text: prompt }];
+
+        // Add image for Editing (Nano Banana Feature)
+        if (attachment) {
+             parts.push({
+                inlineData: {
+                    mimeType: attachment.mimeType,
+                    data: attachment.data
+                }
+             });
+        }
+
         const response = await this.ai.models.generateContent({
             model: MODEL_IMAGE,
             contents: {
-                parts: [{ text: prompt }]
+                parts: parts
             }
         });
 
@@ -209,7 +228,7 @@ class GeminiService {
         return { url: imageUrl, text: sanitizeResponse(textOutput) };
 
      } catch (error) {
-        console.error("Gemini Image Gen Error:", error);
+        console.error("Gemini Image Gen/Edit Error:", error);
         throw error;
      }
   }
@@ -218,7 +237,8 @@ class GeminiService {
   async connectLive(
     onAudioData: (buffer: AudioBuffer) => void,
     onClose: () => void,
-    onSpeakingChange?: (speaking: boolean) => void
+    onSpeakingChange?: (speaking: boolean) => void,
+    onUserVolume?: (volume: number) => void // New callback for visualizer
   ) {
     if (!this.currentKey) {
         this.currentKey = GEMINI_API_KEY;
@@ -232,7 +252,7 @@ class GeminiService {
     const inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
     const outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
     
-    // Master Gain Node for Instant Muting (Interruption Handling)
+    // Master Gain Node for controlling output volume
     const outputGainNode = outputAudioContext.createGain();
     outputGainNode.connect(outputAudioContext.destination);
     
@@ -241,14 +261,17 @@ class GeminiService {
 
     const sources = new Set<AudioBufferSourceNode>();
     let nextStartTime = 0;
+    
+    // Hold State
+    let isPaused = false;
 
-    // PERSISTENT NODES TO PREVENT GARBAGE COLLECTION (AUTO CLOSE FIX)
+    // PERSISTENT NODES
     let sourceNode: MediaStreamAudioSourceNode | null = null;
     let processorNode: ScriptProcessorNode | null = null;
+    let inputMuteNode: GainNode | null = null;
 
     let stream: MediaStream;
     try {
-        // Optimized Mic Constraints for Noise Cancellation
         stream = await navigator.mediaDevices.getUserMedia({ 
             audio: {
                 echoCancellation: true,
@@ -262,6 +285,18 @@ class GeminiService {
         throw e;
     }
 
+    // CREATE AUDIO NODES IMMEDIATELY TO PREVENT SCOPE GC ISSUES
+    // Even before connection opens, we prepare the graph
+    sourceNode = inputAudioContext.createMediaStreamSource(stream);
+    processorNode = inputAudioContext.createScriptProcessor(4096, 1, 1);
+    inputMuteNode = inputAudioContext.createGain();
+    inputMuteNode.gain.value = 0; // Prevent feedback loop
+    
+    // Connect Graph
+    sourceNode.connect(processorNode);
+    processorNode.connect(inputMuteNode);
+    inputMuteNode.connect(inputAudioContext.destination);
+
     try {
         const sessionPromise = this.ai.live.connect({
           model: MODEL_LIVE,
@@ -269,46 +304,31 @@ class GeminiService {
             onopen: () => {
               console.log("Burnit AI Live Connection Opened");
               
-              // Create nodes
-              sourceNode = inputAudioContext.createMediaStreamSource(stream);
-              // Reduced buffer size to 2048 for faster response (Latency Fix)
-              processorNode = inputAudioContext.createScriptProcessor(2048, 1, 1);
-              
+              if (!processorNode) return; // safety
+
               processorNode.onaudioprocess = (audioProcessingEvent) => {
                 const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
+                
+                // --- 1. Calculate Volume for Visualizer ---
+                let sum = 0;
+                for (let i = 0; i < inputData.length; i++) {
+                    sum += inputData[i] * inputData[i];
+                }
+                const rms = Math.sqrt(sum / inputData.length);
+                onUserVolume?.(Math.min(1, rms * 5)); 
+
+                // --- 2. HOLD LOGIC: Do not send data if paused ---
+                if (isPaused) return;
+
                 const pcmBlob = createBlob(inputData);
                 sessionPromise.then((session) => {
                   session.sendRealtimeInput({ media: pcmBlob });
                 });
               };
-
-              // Connect nodes
-              sourceNode.connect(processorNode);
-              processorNode.connect(inputAudioContext.destination);
             },
             onmessage: async (message: LiveServerMessage) => {
-              // --- INSTANT INTERRUPTION LOGIC ---
-              if (message.serverContent?.interrupted) {
-                  console.log("Interruption detected - Muting Output");
-                  
-                  // 1. Mute immediately to kill any lagging sound
-                  outputGainNode.gain.setValueAtTime(0, outputAudioContext.currentTime);
-                  
-                  // 2. Stop all sources
-                  for (const source of sources) {
-                      try { source.stop(); } catch(e) {}
-                  }
-                  sources.clear();
-                  nextStartTime = 0;
-                  onSpeakingChange?.(false);
-                  
-                  // 3. Restore volume slightly later for next turn
-                  setTimeout(() => {
-                      outputGainNode.gain.setValueAtTime(1, outputAudioContext.currentTime);
-                  }, 200);
-                  
-                  return;
-              }
+              // Ignore audio if on hold
+              if (isPaused) return;
 
               const base64EncodedAudioString = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
               
@@ -322,12 +342,9 @@ class GeminiService {
                 
                 onAudioData(audioBuffer);
 
-                // Ensure we don't schedule in the past
                 nextStartTime = Math.max(nextStartTime, outputAudioContext.currentTime);
-                
                 const source = outputAudioContext.createBufferSource();
                 source.buffer = audioBuffer;
-                // Connect to Gain Node instead of Destination directly
                 source.connect(outputGainNode);
                 
                 source.addEventListener('ended', () => {
@@ -344,6 +361,11 @@ class GeminiService {
               }
             },
             onerror: (e) => {
+                const msg = e.toString().toLowerCase();
+                if (msg.includes("network") || msg.includes("aborted") || msg.includes("close")) {
+                    console.warn("Suppressed Live API transient error:", e);
+                    return;
+                }
                 console.error("Live API Error", e);
                 onClose();
             },
@@ -353,7 +375,7 @@ class GeminiService {
             }
           },
           config: {
-            responseModalities: [Modality.AUDIO],
+            responseModalities: [Modality.AUDIO], // Only Audio needed for native speed
             speechConfig: {
               voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } },
             },
@@ -362,15 +384,14 @@ class GeminiService {
           },
         });
 
+        // RETURN NODES TO APP TO PREVENT GARBAGE COLLECTION
         return {
             disconnect: () => {
                 sessionPromise.then(session => session.close());
                 stream.getTracks().forEach(track => track.stop());
-                
-                // Cleanup Audio Nodes explicitly
                 if (sourceNode) sourceNode.disconnect();
                 if (processorNode) processorNode.disconnect();
-                
+                if (inputMuteNode) inputMuteNode.disconnect();
                 inputAudioContext.close();
                 outputAudioContext.close();
                 onSpeakingChange?.(false);
@@ -378,7 +399,17 @@ class GeminiService {
             toggleMute: (mute: boolean) => {
                 stream.getAudioTracks().forEach(track => track.enabled = !mute);
             },
+            setPaused: (paused: boolean) => {
+                isPaused = paused;
+                if (paused) {
+                    outputGainNode.gain.value = 0; 
+                    onSpeakingChange?.(false);
+                } else {
+                    outputGainNode.gain.value = 1;
+                }
+            },
             sendVideoFrame: (base64Data: string) => {
+                if (isPaused) return;
                 sessionPromise.then(session => {
                     session.sendRealtimeInput({
                         media: {
@@ -387,7 +418,10 @@ class GeminiService {
                         }
                     });
                 });
-            }
+            },
+            // CRITICAL: References returned so React Ref holds them
+            processorNode,
+            sourceNode
         };
     } catch (error) {
         console.error("Failed to establish Live connection", error);

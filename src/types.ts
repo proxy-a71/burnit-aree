@@ -25,6 +25,7 @@ export interface ChatSession {
   title: string;
   messages: ChatMessage[];
   lastUpdated: number;
+  sessionType?: 'chat' | 'image'; // New: Strictly separates Chat vs Image Studio
 }
 
 export enum AppMode {
