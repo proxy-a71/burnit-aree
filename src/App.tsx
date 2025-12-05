@@ -6,7 +6,7 @@ import {
   Flame, MessageSquare, Mic, Image as ImageIcon, 
   Send, Paperclip, Settings, LogOut, Moon, Sun, X, MicOff,
   User as UserIcon, Calendar, MapPin, Camera, Video, ChevronLeft, ChevronRight, Upload, PhoneOff, VideoOff, Play, Key, Globe, File as FileIcon, Plus, MessageCircle, Menu, Link as LinkIcon, Wand2,
-  Pause, PlayCircle
+  Pause, PlayCircle, Music, Disc, SkipForward, Volume2, ExternalLink
 } from 'lucide-react';
 import { PLACEHOLDER_AVATAR, BURNIT_LOGO_URL } from './constants';
 import ReactMarkdown from 'react-markdown';
@@ -35,6 +35,8 @@ const App: React.FC = () => {
   // New Live States
   const [isLivePaused, setIsLivePaused] = useState(false);
   const [userVolume, setUserVolume] = useState(0);
+  const [playingTrack, setPlayingTrack] = useState<string | null>(null);
+  const [isMusicPlaying, setIsMusicPlaying] = useState(false); // Music playing state
 
   const [language, setLanguage] = useState('English');
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
@@ -51,6 +53,8 @@ const App: React.FC = () => {
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const musicFrameRef = useRef<HTMLIFrameElement>(null);
+  const livePdfInputRef = useRef<HTMLInputElement>(null); // New ref for live PDF
   
   // Updated Ref to hold nodes to prevent GC
   const liveCleanupRef = useRef<{ 
@@ -58,6 +62,7 @@ const App: React.FC = () => {
       toggleMute: (mute: boolean) => void; 
       sendVideoFrame: (data: string) => void;
       setPaused: (paused: boolean) => void;
+      updateContext: (text: string, restart: () => void) => void; // UPDATED
       processorNode?: ScriptProcessorNode | null; // Keep reference
       sourceNode?: MediaStreamAudioSourceNode | null; // Keep reference
   } | null>(null);
@@ -174,6 +179,15 @@ const App: React.FC = () => {
   }, [messages, isLoading]);
 
   useEffect(() => { document.documentElement.classList.toggle('dark', theme === 'dark'); }, [theme]);
+
+  // Handle Music State
+  useEffect(() => {
+      if (playingTrack) {
+          setIsMusicPlaying(true);
+      } else {
+          setIsMusicPlaying(false);
+      }
+  }, [playingTrack]);
 
   // Video Stream Effect
   useEffect(() => {
@@ -304,6 +318,40 @@ const App: React.FC = () => {
       }
   };
 
+  // --- NEW: Handle PDF Upload in Live Mode (Safe Reconnect Strategy) ---
+  const handleLivePdfClick = () => livePdfInputRef.current?.click();
+  const handleLivePdfChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (file && liveCleanupRef.current) {
+           const reader = new FileReader();
+           reader.onloadend = async () => {
+               const base64 = (reader.result as string).split(',')[1];
+               alert("Burnit AI is reading your PDF document... please wait a moment.");
+               
+               // 1. Read PDF text via REST API
+               const extractedText = await geminiService.readPdf(base64);
+               
+               if (!extractedText || extractedText.length < 5) {
+                   alert("Could not extract text from this PDF. It might be an image-only PDF.");
+                   return;
+               }
+
+               // 2. Safe Update: Update Context and Restart Session
+               // This avoids 'session.send is not a function' error.
+               liveCleanupRef.current?.updateContext(extractedText, () => {
+                   // Restart logic:
+                   endLiveSession();
+                   // Small delay to ensure cleanup
+                   setTimeout(() => {
+                       startLiveSession();
+                       alert("PDF Added! Burnit AI has restarted with the new document in memory.");
+                   }, 500);
+               });
+           };
+           reader.readAsDataURL(file);
+      }
+  };
+
   const handleSendMessage = async () => {
     if ((!input.trim() && !attachment) || isLoading) return;
     
@@ -355,8 +403,6 @@ const App: React.FC = () => {
     } catch (error: any) {
       console.error("Message handling error:", error);
       const errorText = "⚠️ Error: Failed to process request. Please try again.";
-      // Do not try to update session if unmounted, but we are in try block.
-      // We can't guarantee `messages` is fresh in async, so best effort.
     } finally {
       setIsLoading(false);
     }
@@ -368,17 +414,20 @@ const App: React.FC = () => {
         const controls = await geminiService.connectLive(
             (buffer) => {}, 
             () => {
+                // Connection closed or error
                 setIsLiveConnected(false); setIsVideoEnabled(false); setIsMicMuted(false);
-                setIsAiSpeaking(false); setIsLivePaused(false);
+                setIsAiSpeaking(false); setIsLivePaused(false); setPlayingTrack(null);
                 if (videoIntervalRef.current) clearInterval(videoIntervalRef.current);
             },
             (speaking) => setIsAiSpeaking(speaking),
-            (volume) => setUserVolume(volume) 
+            (volume) => setUserVolume(volume),
+            (trackQuery) => setPlayingTrack(trackQuery) // Handle Music Tool
         );
         liveCleanupRef.current = controls;
         setIsLiveConnected(true); 
         setIsVideoEnabled(false); 
         setIsLivePaused(false);
+        setPlayingTrack(null);
     } catch (err) {
         console.error(err);
         alert("Failed to connect to Live API. Please check your API Key and Permissions.");
@@ -386,8 +435,11 @@ const App: React.FC = () => {
   };
 
   const endLiveSession = () => {
-      if (liveCleanupRef.current) { liveCleanupRef.current.disconnect(); liveCleanupRef.current = null; }
-      setIsLiveConnected(false); setIsVideoEnabled(false); setIsMicMuted(false); setIsAiSpeaking(false); setIsLivePaused(false);
+      if (liveCleanupRef.current) { 
+          liveCleanupRef.current.disconnect(); 
+          liveCleanupRef.current = null; 
+      }
+      setIsLiveConnected(false); setIsVideoEnabled(false); setIsMicMuted(false); setIsAiSpeaking(false); setIsLivePaused(false); setPlayingTrack(null);
   };
 
   const toggleMic = () => {
@@ -403,6 +455,21 @@ const App: React.FC = () => {
           const newPausedState = !isLivePaused;
           liveCleanupRef.current.setPaused(newPausedState);
           setIsLivePaused(newPausedState);
+      }
+  };
+
+  const toggleMusicPlay = () => {
+      if (!musicFrameRef.current) return;
+      if (isMusicPlaying) {
+          // Pause
+          musicFrameRef.current.contentWindow?.postMessage(JSON.stringify({event: 'command', func: 'pauseVideo'}), '*');
+          setIsMusicPlaying(false);
+      } else {
+          // Play
+          musicFrameRef.current.contentWindow?.postMessage(JSON.stringify({event: 'command', func: 'playVideo'}), '*');
+          // Also send unmute just in case
+          musicFrameRef.current.contentWindow?.postMessage(JSON.stringify({event: 'command', func: 'unMute'}), '*');
+          setIsMusicPlaying(true);
       }
   };
 
@@ -486,7 +553,6 @@ const App: React.FC = () => {
   // Filter sessions based on current mode
   const currentModeSessions = sessions.filter(s => {
       if (mode === AppMode.IMAGE) return s.sessionType === 'image';
-      // If Chat or Live, show chat history. If Profile/Settings, just show chat history in sidebar.
       return s.sessionType !== 'image'; 
   });
 
@@ -641,11 +707,53 @@ const App: React.FC = () => {
       ) : mode === AppMode.LIVE ? (
           isLiveConnected ? (
              <div className="flex-1 flex flex-col h-full bg-gray-900 dark:bg-[#0a0a0a] p-2 md:p-4 gap-4 overflow-hidden relative">
+                {/* Hold Overlay */}
                 {isLivePaused && (
                     <div className="absolute inset-0 z-[50] flex flex-col items-center justify-center bg-black/80 backdrop-blur-sm cursor-pointer" onClick={toggleHold}>
                         <Pause size={64} className="text-burnit-red mb-4 animate-pulse" />
                         <h2 className="text-3xl font-bold text-white text-center px-4">Burnit AI is on Hold!</h2>
                         <p className="text-gray-400 mt-2 text-lg">Tap anywhere to Resume</p>
+                    </div>
+                )}
+                
+                {/* Music Player Bar (Replaces Popup) - UPDATED POSITION FOR MOBILE */}
+                {playingTrack && !isLivePaused && (
+                    <div className="absolute top-20 left-1/2 -translate-x-1/2 md:top-auto md:bottom-24 z-[40] w-[90%] md:w-[600px] bg-black/80 backdrop-blur-xl border border-white/20 rounded-full overflow-hidden shadow-2xl animate-in slide-in-from-top md:slide-in-from-bottom fade-in duration-500 flex items-center p-2 pr-6 gap-4">
+                        {/* 1. VISIBLE Iframe Container (Required for browser autoplay policy) */}
+                        <div className="relative w-16 h-12 md:w-20 md:h-16 shrink-0 z-10 overflow-hidden rounded-lg bg-black border border-white/10">
+                            <iframe 
+                                ref={musicFrameRef}
+                                src={`https://www.youtube.com/embed?listType=search&list=${encodeURIComponent(playingTrack)}&autoplay=1&enablejsapi=1&playsinline=1&origin=${window.location.origin}`}
+                                className="w-full h-full object-cover"
+                                sandbox="allow-scripts allow-same-origin allow-presentation"
+                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                referrerPolicy="no-referrer"
+                            ></iframe>
+                        </div>
+                        
+                        <div className="flex-1 min-w-0 flex flex-col justify-center z-10">
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs font-bold text-burnit-cyan uppercase tracking-wider">Now Playing</span>
+                                {isMusicPlaying && (
+                                    <div className="flex gap-0.5 items-end h-3 pb-0.5">
+                                        <div className="w-0.5 h-full bg-burnit-cyan animate-pulse"></div>
+                                        <div className="w-0.5 h-2/3 bg-burnit-cyan animate-pulse delay-75"></div>
+                                        <div className="w-0.5 h-full bg-burnit-cyan animate-pulse delay-150"></div>
+                                    </div>
+                                )}
+                            </div>
+                            <p className="text-white text-sm font-bold truncate leading-tight">{playingTrack.replace(' lyrics', '')}</p>
+                            <a href={`https://www.youtube.com/results?search_query=${encodeURIComponent(playingTrack)}`} target="_blank" rel="noreferrer" className="text-[10px] text-gray-400 hover:text-white flex items-center gap-1 mt-0.5">
+                                <ExternalLink size={8} /> If player fails, click here
+                            </a>
+                        </div>
+
+                        <div className="flex items-center gap-4 text-white z-10">
+                             <button onClick={toggleMusicPlay} className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition-all">
+                                 {isMusicPlaying ? <Pause size={20} className="fill-white" /> : <Play size={20} className="fill-white" />}
+                             </button>
+                             <button onClick={() => setPlayingTrack(null)} className="p-2 bg-white/10 hover:bg-white/20 rounded-full transition-all"><X size={16}/></button>
+                        </div>
                     </div>
                 )}
 
@@ -658,17 +766,25 @@ const App: React.FC = () => {
                     <div className="flex-1 bg-gray-800 dark:bg-[#111] rounded-2xl border border-white/10 relative overflow-hidden flex flex-col items-center justify-center group min-h-[40%]">
                         <div className="absolute top-4 right-4 bg-black/60 px-3 py-1 rounded-full text-xs font-bold text-white border border-white/10 z-20">YOU</div>
                         {isMicMuted && (<div className="absolute top-14 left-4 z-30 pointer-events-none"><div className="bg-black/60 p-2 rounded-full backdrop-blur-md border border-red-500/50 animate-pulse"><MicOff className="w-5 h-5 text-red-500" /></div></div>)}
+                        {/* MIRROR MODE REMOVED: Deleted 'transform scale-x-[-1]' */}
                         {isVideoEnabled ? <video ref={videoRef} autoPlay muted playsInline className="absolute inset-0 w-full h-full object-cover" /> : <div className="flex flex-col items-center gap-4"><img src={user.photoURL || PLACEHOLDER_AVATAR} className="w-24 h-24 md:w-32 md:h-32 rounded-full border-4 border-gray-600 dark:border-gray-700 opacity-50" /><p className="text-gray-400 dark:text-gray-500">Camera Off</p></div>}
                         
                         {/* User Audio Visualizer */}
                         {renderUserVisualizer()}
                     </div>
                 </div>
-                <div className="h-20 shrink-0 bg-[#161616] rounded-2xl border border-white/10 flex items-center justify-center gap-4 md:gap-6 px-4 z-20">
-                    <button type="button" onClick={toggleMic} className={`p-4 rounded-full transition-all ${isMicMuted ? 'bg-red-500 hover:bg-red-600 text-white' : 'bg-white/10 hover:bg-white/20 text-white'}`}>{isMicMuted ? <MicOff /> : <Mic />}</button>
-                    <button type="button" onClick={toggleHold} className={`p-4 rounded-full transition-all ${isLivePaused ? 'bg-yellow-500 text-black' : 'bg-white/10 hover:bg-white/20 text-white'}`}>{isLivePaused ? <PlayCircle /> : <Pause />}</button>
-                    <button type="button" onClick={endLiveSession} className="px-6 py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl transition-all uppercase tracking-wider text-sm md:text-base whitespace-nowrap">End Class</button>
-                    <button type="button" onClick={() => setIsVideoEnabled(!isVideoEnabled)} className={`p-4 rounded-full transition-all ${!isVideoEnabled ? 'bg-red-500 hover:bg-red-600 text-white' : 'bg-white/10 hover:bg-white/20 text-white'}`}>{!isVideoEnabled ? <VideoOff /> : <Video />}</button>
+                {/* FIXED: Using Flex Wrap to prevent overlap on mobile */}
+                <div className="min-h-20 shrink-0 bg-[#161616] rounded-2xl border border-white/10 flex flex-wrap items-center justify-center gap-4 p-4 z-20 relative">
+                    {/* Live PDF Upload Button - Now part of flex flow on mobile */}
+                    <button type="button" onClick={handleLivePdfClick} className="p-3 rounded-full bg-white/10 hover:bg-white/20 text-white transition-all border border-white/5 order-1 md:absolute md:left-6 md:top-1/2 md:-translate-y-1/2 md:order-none" title="Upload PDF to Read">
+                        <FileIcon size={20} />
+                        <input type="file" ref={livePdfInputRef} onChange={handleLivePdfChange} className="hidden" accept="application/pdf" />
+                    </button>
+
+                    <button type="button" onClick={toggleMic} className={`p-4 rounded-full transition-all order-2 ${isMicMuted ? 'bg-red-500 hover:bg-red-600 text-white' : 'bg-white/10 hover:bg-white/20 text-white'}`}>{isMicMuted ? <MicOff /> : <Mic />}</button>
+                    <button type="button" onClick={toggleHold} className={`p-4 rounded-full transition-all order-3 ${isLivePaused ? 'bg-yellow-500 text-black' : 'bg-white/10 hover:bg-white/20 text-white'}`}>{isLivePaused ? <PlayCircle /> : <Pause />}</button>
+                    <button type="button" onClick={endLiveSession} className="px-6 py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl transition-all uppercase tracking-wider text-sm md:text-base whitespace-nowrap order-4">End Class</button>
+                    <button type="button" onClick={() => setIsVideoEnabled(!isVideoEnabled)} className={`p-4 rounded-full transition-all order-5 ${!isVideoEnabled ? 'bg-red-500 hover:bg-red-600 text-white' : 'bg-white/10 hover:bg-white/20 text-white'}`}>{!isVideoEnabled ? <VideoOff /> : <Video />}</button>
                 </div>
              </div>
           ) : (

@@ -1,4 +1,4 @@
-import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
+import { GoogleGenAI, LiveServerMessage, Modality, FunctionDeclaration, Type } from "@google/genai";
 import { MODEL_TEXT, MODEL_IMAGE, MODEL_LIVE, GEMINI_API_KEY } from "../constants";
 
 // --- Helpers for Audio Encoding/Decoding ---
@@ -54,6 +54,27 @@ async function decodeAudioData(
   return buffer;
 }
 
+// --- Tools ---
+
+const playMusicTool: FunctionDeclaration = {
+  name: "play_music",
+  description: "Plays a song. Use this tool when the user asks to play music, a song, or audio. Input the exact song name and artist.",
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      song_name: {
+        type: Type.STRING,
+        description: "The name of the song to play."
+      },
+      artist_name: {
+        type: Type.STRING,
+        description: "The name of the artist (optional)."
+      }
+    },
+    required: ["song_name"]
+  }
+};
+
 // --- Constants & System Instructions ---
 
 const BURNIT_SYSTEM_INSTRUCTION = `
@@ -78,10 +99,18 @@ You are **Burnit AI**, a helpful and motivated AI assistant.
 - REPLY EXACTLY: "Sorry! You can do this on Burnit Image Studio !!"
 - Do not try to generate it yourself or describe an image. Direct them to the Image Studio.
 
-**WEB ABILITIES:**
+**MUSICAL & AUDIO CAPABILITIES (SINGING):**
+- **You are a talented vocalist.** If the user asks you to sing a song, perform it!
+- Generate the lyrics (or use known lyrics) and speak them with a rhythmic, melodic, and expressive cadence that mimics singing.
+- Do not just say the lyrics; perform them with emotion and musicality.
+- If asked to "play" a specific song (e.g., "Play Shape of You"), use the \`play_music\` tool to launch the music player.
+- You can also mimic sound effects (drums, guitar noises) if asked.
+
+**WEB & DOCUMENT ABILITIES:**
 - You have the power to "read" websites via Google Search grounding. 
+- You can now read PDF documents provided by the user. The content is sent to you as a SYSTEM MESSAGE. Use it to answer questions.
 - If a user asks you to "click buttons" or "navigate" a site, use your knowledge and search results to describe what happens when those actions are taken, or find the information they are looking for. 
-- You are a multimodal agent: you can see images, hear audio, and search the web.
+- You are a multimodal agent: you can see images, hear audio, read PDFs, and search the web.
 
 **INTERACTION:**
 - If asked "Who are you?", say: "I am Burnit AI! Your Personal Ai For Your Confusing Questions, Giving You Motivation 💪 And Help You In Any Error's!!"
@@ -111,6 +140,11 @@ function sanitizeResponse(text: string | undefined | null): string {
 class GeminiService {
   private ai: GoogleGenAI;
   private currentKey: string;
+  
+  // LIVE SESSION STATE MANAGEMENT
+  private currentLiveContext: string = BURNIT_SYSTEM_INSTRUCTION;
+  private liveSession: any = null; // Store session ref to close it
+  private liveCallbacks: any = null; // Store callbacks to reuse on reconnect
 
   constructor() {
     this.currentKey = GEMINI_API_KEY; 
@@ -233,12 +267,48 @@ class GeminiService {
      }
   }
 
-  // 3. Live API Connection
+  // 3. Helper: Read PDF for Live Context (Extracts Text)
+  async readPdf(base64Data: string): Promise<string> {
+      try {
+          const response = await this.ai.models.generateContent({
+              model: MODEL_TEXT,
+              contents: {
+                  parts: [
+                      { text: "OCR Task: Extract all text from this PDF document. Clean formatting and remove excessive newlines. Just provide the raw text structure." },
+                      {
+                          inlineData: {
+                              mimeType: 'application/pdf',
+                              data: base64Data
+                          }
+                      }
+                  ]
+              }
+          });
+          return response.text || "Could not read PDF.";
+      } catch (e) {
+          console.error("PDF Read Error", e);
+          return "Error reading PDF.";
+      }
+  }
+
+  // 4. Update Live Context (Reconnect Strategy)
+  async updateLiveContext(additionalContext: string, restartCallback: () => void) {
+      // Limit context size to prevent stuttering from massive prompts
+      const cleanedContext = additionalContext.replace(/\n\s*\n/g, '\n').substring(0, 30000);
+      this.currentLiveContext += `\n\n[UPDATED CONTEXT FROM USER UPLOAD]:\n${cleanedContext}`;
+      
+      if (this.liveSession) {
+          restartCallback();
+      }
+  }
+
+  // 5. Live API Connection
   async connectLive(
     onAudioData: (buffer: AudioBuffer) => void,
     onClose: () => void,
     onSpeakingChange?: (speaking: boolean) => void,
-    onUserVolume?: (volume: number) => void // New callback for visualizer
+    onUserVolume?: (volume: number) => void,
+    onPlayMusic?: (query: string) => void // New Callback for Music Tool
   ) {
     if (!this.currentKey) {
         this.currentKey = GEMINI_API_KEY;
@@ -249,10 +319,11 @@ class GeminiService {
         }
     }
 
+    this.liveCallbacks = { onAudioData, onClose, onSpeakingChange, onUserVolume, onPlayMusic };
+
     const inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
     const outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
     
-    // Master Gain Node for controlling output volume
     const outputGainNode = outputAudioContext.createGain();
     outputGainNode.connect(outputAudioContext.destination);
     
@@ -262,7 +333,6 @@ class GeminiService {
     const sources = new Set<AudioBufferSourceNode>();
     let nextStartTime = 0;
     
-    // Hold State
     let isPaused = false;
 
     // PERSISTENT NODES
@@ -285,17 +355,24 @@ class GeminiService {
         throw e;
     }
 
-    // CREATE AUDIO NODES IMMEDIATELY TO PREVENT SCOPE GC ISSUES
-    // Even before connection opens, we prepare the graph
     sourceNode = inputAudioContext.createMediaStreamSource(stream);
     processorNode = inputAudioContext.createScriptProcessor(4096, 1, 1);
     inputMuteNode = inputAudioContext.createGain();
-    inputMuteNode.gain.value = 0; // Prevent feedback loop
+    inputMuteNode.gain.value = 0; 
     
-    // Connect Graph
     sourceNode.connect(processorNode);
     processorNode.connect(inputMuteNode);
     inputMuteNode.connect(inputAudioContext.destination);
+
+    // CLEANUP FUNCTION TO STOP ALL AUDIO IMMEDIATELY
+    const stopAllAudio = () => {
+        sources.forEach(source => {
+            try { source.stop(); } catch(e) {}
+        });
+        sources.clear();
+        nextStartTime = 0;
+        onSpeakingChange?.(false);
+    };
 
     try {
         const sessionPromise = this.ai.live.connect({
@@ -304,12 +381,11 @@ class GeminiService {
             onopen: () => {
               console.log("Burnit AI Live Connection Opened");
               
-              if (!processorNode) return; // safety
+              if (!processorNode) return; 
 
               processorNode.onaudioprocess = (audioProcessingEvent) => {
                 const inputData = audioProcessingEvent.inputBuffer.getChannelData(0);
                 
-                // --- 1. Calculate Volume for Visualizer ---
                 let sum = 0;
                 for (let i = 0; i < inputData.length; i++) {
                     sum += inputData[i] * inputData[i];
@@ -317,7 +393,6 @@ class GeminiService {
                 const rms = Math.sqrt(sum / inputData.length);
                 onUserVolume?.(Math.min(1, rms * 5)); 
 
-                // --- 2. HOLD LOGIC: Do not send data if paused ---
                 if (isPaused) return;
 
                 const pcmBlob = createBlob(inputData);
@@ -327,8 +402,31 @@ class GeminiService {
               };
             },
             onmessage: async (message: LiveServerMessage) => {
-              // Ignore audio if on hold
               if (isPaused) return;
+
+              if (message.toolCall) {
+                  const responses = [];
+                  for (const fc of message.toolCall.functionCalls) {
+                      if (fc.name === 'play_music') {
+                          const song = fc.args['song_name'] as string;
+                          const artist = fc.args['artist_name'] as string || '';
+                          // HACK: Append "lyrics" to force Lyric Videos which are less likely to be blocked by VEVO/Copyright
+                          const query = `${song} ${artist} lyrics`.trim();
+                          
+                          onPlayMusic?.(query);
+
+                          responses.push({
+                              id: fc.id,
+                              name: fc.name,
+                              response: { result: `Started playing "${query}" in the visual music player overlay.` }
+                          });
+                      }
+                  }
+                  
+                  if (responses.length > 0) {
+                      sessionPromise.then(session => session.sendToolResponse({ functionResponses: responses }));
+                  }
+              }
 
               const base64EncodedAudioString = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
               
@@ -342,7 +440,12 @@ class GeminiService {
                 
                 onAudioData(audioBuffer);
 
-                nextStartTime = Math.max(nextStartTime, outputAudioContext.currentTime);
+                // Add small buffer safety to prevent "talk-stop-talk" stuttering
+                const currentTime = outputAudioContext.currentTime;
+                if (nextStartTime < currentTime) {
+                    nextStartTime = currentTime + 0.05; 
+                }
+
                 const source = outputAudioContext.createBufferSource();
                 source.buffer = audioBuffer;
                 source.connect(outputGainNode);
@@ -362,29 +465,35 @@ class GeminiService {
             },
             onerror: (e) => {
                 const msg = e.toString().toLowerCase();
-                if (msg.includes("network") || msg.includes("aborted") || msg.includes("close")) {
-                    console.warn("Suppressed Live API transient error:", e);
+                if (msg.includes("network") || msg.includes("aborted") || msg.includes("close") || msg.includes("permission") || msg.includes("403")) {
+                    console.warn("Suppressed Live API error:", msg);
                     return;
                 }
                 console.error("Live API Error", e);
+                stopAllAudio(); // Stop talking on error
                 onClose();
             },
             onclose: (e) => {
                 console.log("Live API Closed", e);
+                stopAllAudio(); // Stop talking on close
                 onClose();
             }
           },
           config: {
-            responseModalities: [Modality.AUDIO], // Only Audio needed for native speed
+            responseModalities: [Modality.AUDIO], 
             speechConfig: {
               voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } },
             },
-            systemInstruction: BURNIT_SYSTEM_INSTRUCTION,
-            tools: [{googleSearch: {}}] 
+            systemInstruction: this.currentLiveContext,
+            tools: [
+              { googleSearch: {} },
+              { functionDeclarations: [playMusicTool] } 
+            ]
           },
         });
+        
+        sessionPromise.then(s => this.liveSession = s);
 
-        // RETURN NODES TO APP TO PREVENT GARBAGE COLLECTION
         return {
             disconnect: () => {
                 sessionPromise.then(session => session.close());
@@ -394,6 +503,7 @@ class GeminiService {
                 if (inputMuteNode) inputMuteNode.disconnect();
                 inputAudioContext.close();
                 outputAudioContext.close();
+                stopAllAudio(); // Ensure silence
                 onSpeakingChange?.(false);
             },
             toggleMute: (mute: boolean) => {
@@ -419,7 +529,9 @@ class GeminiService {
                     });
                 });
             },
-            // CRITICAL: References returned so React Ref holds them
+            updateContext: (text: string, restart: () => void) => {
+                this.updateLiveContext(text, restart);
+            },
             processorNode,
             sourceNode
         };
