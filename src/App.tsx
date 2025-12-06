@@ -418,7 +418,23 @@ const App: React.FC = () => {
             },
             (speaking) => setIsAiSpeaking(speaking),
             (volume) => setUserVolume(volume),
-            (trackQuery) => setPlayingTrack(trackQuery)
+            (trackQuery) => setPlayingTrack(trackQuery),
+            // NEW: Handle Live Transcripts to save Memory
+            (text, role) => {
+                setSessions(prev => prev.map(session => {
+                    if (session.id === currentSessionId) {
+                        const newMsg: ChatMessage = {
+                            id: Date.now().toString(),
+                            role: role,
+                            text: text,
+                            timestamp: Date.now(),
+                            type: 'text'
+                        };
+                        return { ...session, messages: [...session.messages, newMsg], lastUpdated: Date.now() };
+                    }
+                    return session;
+                }));
+            }
         );
         liveCleanupRef.current = controls;
         setIsLiveConnected(true); 

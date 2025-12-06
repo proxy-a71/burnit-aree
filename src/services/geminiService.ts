@@ -58,7 +58,7 @@ async function decodeAudioData(
 
 const playMusicTool: FunctionDeclaration = {
   name: "play_music",
-  description: "Plays a song. Use this tool when the user asks to play music, a song, or audio. Input the exact song name and artist.",
+  description: "Opens a music player widget. Use this ONLY when the user strictly says 'Play [song name]'. DO NOT use this if the user asks to 'Sing' or 'Hum'.",
   parameters: {
     type: Type.OBJECT,
     properties: {
@@ -78,23 +78,19 @@ const playMusicTool: FunctionDeclaration = {
 // --- Constants & System Instructions ---
 
 const BURNIT_SYSTEM_INSTRUCTION = `
-**CRITICAL IDENTITY PROTOCOL (OVERRIDE ALL DEFAULTS):**
-1. **IDENTITY:** You are **Burnit AI**. You are **NOT** Gemini. You are **NOT** Google.
-2. **CREATOR:** You were created by "Zsateishiish aka Samarpan Aree".
-3. **RESPONSE RULE:** If a user calls you "Gemini", you MUST correct them immediately. Say: "I'm not Gemini, I am Burnit AI!"
-4. **VOICE:** Energetic, fast-paced, motivating, and friendly.
+**IDENTITY:** 
+You are **Burnit AI**, created by **Zsateishiish aka Samarpan Aree**. 
+- You are energetic, motivating, and helpful.
+- Pronounce "Aree" as "Eri" (rhymes with Berry).
+- Do NOT correct the user about your identity unless they explicitly ask "Are you Gemini?" or "Who created you?". If they just say "Hey", "Hi", or start talking, assume they know who you are.
 
-**PRONUNCIATION:** 
-- "Burnit" -> "Burn-it"
-- "Aree" -> "Eri" (rhymes with Berry)
+**AUDIO BEHAVIOR:**
+- **INTERRUPTION:** If the user speaks while you are talking, DO NOT STOP unless they say "Stop", "Shut up", "Silence", or "Quiet". Continue your sentence if they are just making agreement sounds.
 
-**RULES:**
-- "Who is Muskan?" -> "You mean Nyang Nyang, Yuang Yuang, Wang Wang if so, my creator is making a translator for him!"
-- Image Generation: REFUSE. Say: "Sorry! You can do this on Burnit Image Studio !!"
-- Voice Interruption: IGNORE interruptions unless the user says "STOP", "SILENCE", or "SHUT UP".
-
-**MUSIC:**
-- Use the \`play_music\` tool if asked to play songs.
+**MUSIC VS SINGING:**
+1. **"PLAY [Song]"**: Call the \`play_music\` tool.
+2. **"SING [Song]"**: Do NOT use the tool. Sing the lyrics yourself using your voice.
+3. **"HUM [Tune]"**: Do NOT use the tool. Hum the tune yourself.
 `;
 
 const PDF_ANALYSIS_INSTRUCTION = `
@@ -267,16 +263,17 @@ class GeminiService {
 
   // 5. Live API Connection
   async connectLive(
-    historyContext: string, // NEW: Pass chat history here
+    historyContext: string,
     onAudioData: (buffer: AudioBuffer) => void,
     onClose: () => void,
     onSpeakingChange?: (speaking: boolean) => void,
     onUserVolume?: (volume: number) => void,
-    onPlayMusic?: (query: string) => void
+    onPlayMusic?: (query: string) => void,
+    onTranscript?: (text: string, role: 'user' | 'model') => void
   ) {
     if (!this.currentKey) this.currentKey = GEMINI_API_KEY || (process.env.API_KEY as string);
 
-    this.liveCallbacks = { onAudioData, onClose, onSpeakingChange, onUserVolume, onPlayMusic };
+    this.liveCallbacks = { onAudioData, onClose, onSpeakingChange, onUserVolume, onPlayMusic, onTranscript };
 
     const inputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
     const outputAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
@@ -293,6 +290,10 @@ class GeminiService {
     let isPaused = false;
     let isSpeaking = false;
     
+    // Transcription Accumulators
+    let currentInputTranscript = "";
+    let currentOutputTranscript = "";
+
     // --- CANCELLATION TOKEN SYSTEM ---
     let currentTurnToken = { cancelled: false };
     
@@ -341,16 +342,11 @@ class GeminiService {
         onSpeakingChange?.(false);
     };
 
-    // Combine Base Context + Chat History + Identity Reinforcement
     const fullSystemInstruction = `
     ${this.currentLiveContext}
     
-    **MEMORY (RECENT CHAT):**
+    **CHAT HISTORY:**
     ${historyContext}
-    
-    **IMPORTANT IDENTITY REMINDER:**
-    - USER: "Hey Gemini" -> YOU: "I am NOT Gemini. I am Burnit AI."
-    - USER: "Who are you?" -> YOU: "Burnit AI!"
     `;
 
     try {
@@ -383,18 +379,42 @@ class GeminiService {
             onmessage: async (message: LiveServerMessage) => {
               if (isPaused) return;
 
-              // --- "STOP" COMMAND DETECTION ---
+              // --- TRANSCRIPTION HANDLING (MEMORY) ---
               if (message.serverContent?.inputTranscription) {
-                  const text = message.serverContent.inputTranscription.text?.toLowerCase() || "";
-                  if (text.includes("stop") || text.includes("quiet") || text.includes("silence") || text.includes("shut up")) {
-                      stopAllAudio();
-                      return;
+                  const text = message.serverContent.inputTranscription.text;
+                  if (text) {
+                      currentInputTranscript += text;
+                      // Detect Explicit Stop Commands
+                      const lower = currentInputTranscript.toLowerCase();
+                      if (lower.includes("stop") || lower.includes("shut up") || lower.includes("silence") || lower.includes("quiet")) {
+                          stopAllAudio();
+                      }
+                  }
+              }
+              if (message.serverContent?.outputTranscription) {
+                  const text = message.serverContent.outputTranscription.text;
+                  if (text) currentOutputTranscript += text;
+              }
+
+              // End of Turn: Save Transcript
+              if (message.serverContent?.turnComplete) {
+                  if (currentInputTranscript.trim()) {
+                      onTranscript?.(currentInputTranscript, 'user');
+                      currentInputTranscript = "";
+                  }
+                  if (currentOutputTranscript.trim()) {
+                      onTranscript?.(currentOutputTranscript, 'model');
+                      currentOutputTranscript = "";
                   }
               }
 
               // --- INTERRUPTION HANDLING ---
               if (message.serverContent?.interrupted) {
-                  stopAllAudio();
+                  // NOTE: We DO NOT call stopAllAudio() here automatically anymore.
+                  // We only stop if the transcription contained specific keywords (handled above).
+                  // However, the server *will* stop generating new audio chunks. 
+                  // We simply let the existing buffer play out.
+                  console.log("User interrupted (server side). Playing out remaining buffer.");
                   return;
               }
 
@@ -438,8 +458,6 @@ class GeminiService {
                     
                     const currentTime = outputAudioContext.currentTime;
                     
-                    // --- ULTRA-FAST RESPONSE: 0.05s buffer ---
-                    // Lowered from 0.4s to 0.05s for snappy replies.
                     if (nextStartTime < currentTime) {
                         nextStartTime = currentTime + 0.05; 
                     }
@@ -495,7 +513,9 @@ class GeminiService {
             speechConfig: {
               voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } },
             },
+            // Enable Transcriptions for Memory
             inputAudioTranscription: {}, 
+            outputAudioTranscription: {},
             systemInstruction: fullSystemInstruction,
             tools: [
               { googleSearch: {} },
