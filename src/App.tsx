@@ -69,6 +69,10 @@ const App: React.FC = () => {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>('');
   
+  // Ref for currentSessionId to avoid stale closures in Live callbacks
+  const currentSessionIdRef = useRef<string>('');
+  useEffect(() => { currentSessionIdRef.current = currentSessionId; }, [currentSessionId]);
+
   const messages = sessions.find(s => s.id === currentSessionId)?.messages || [];
 
   const [input, setInput] = useState('');
@@ -80,8 +84,8 @@ const App: React.FC = () => {
   const [isLivePaused, setIsLivePaused] = useState(false);
   const [userVolume, setUserVolume] = useState(0);
   const [playingTrack, setPlayingTrack] = useState<string | null>(null);
-  const [isMusicPlaying, setIsMusicPlaying] = useState(false); // Music playing state
-  const [playerError, setPlayerError] = useState(false); // Track player errors
+  const [isMusicPlaying, setIsMusicPlaying] = useState(false); 
+  const [playerError, setPlayerError] = useState(false); 
 
   const [language, setLanguage] = useState('English');
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
@@ -99,7 +103,7 @@ const App: React.FC = () => {
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const musicFrameRef = useRef<HTMLIFrameElement>(null);
-  const livePdfInputRef = useRef<HTMLInputElement>(null); // New ref for live PDF
+  const livePdfInputRef = useRef<HTMLInputElement>(null); 
   
   const liveCleanupRef = useRef<{ 
       disconnect: () => void; 
@@ -144,11 +148,11 @@ const App: React.FC = () => {
 
   // --- LOAD SESSIONS (User Specific) ---
   useEffect(() => {
-    if (!user) return; // Wait for user login
+    if (!user) return; 
 
     const userSessionKey = `burnit_sessions_${user.uid}`;
     const savedSessions = localStorage.getItem(userSessionKey);
-    const legacyGlobalSessions = localStorage.getItem('burnit_sessions'); // Fallback/Migration
+    const legacyGlobalSessions = localStorage.getItem('burnit_sessions'); 
 
     let loadedSessions: ChatSession[] = [];
 
@@ -157,13 +161,11 @@ const App: React.FC = () => {
             loadedSessions = JSON.parse(savedSessions);
         } catch (e) { console.error("Error parsing user sessions", e); }
     } else if (legacyGlobalSessions) {
-        // Migration: If no specific data exists, try global
         try {
             loadedSessions = JSON.parse(legacyGlobalSessions);
         } catch (e) { console.error("Error migrating history", e); }
     }
 
-    // Ensure sessionType exists
     loadedSessions = loadedSessions.map(s => ({
         ...s,
         sessionType: s.sessionType || 'chat' 
@@ -181,11 +183,10 @@ const App: React.FC = () => {
     }
 
     setSessions(loadedSessions);
-    // Set current session to the most recent one of the default type
     if (loadedSessions.length > 0) {
         setCurrentSessionId(loadedSessions[0].id);
     }
-  }, [user]); // Re-run when user changes
+  }, [user]); 
 
   const handleLogin = (loggedInUser: User) => {
       let storedProfile: Partial<User> = {};
@@ -236,11 +237,10 @@ const App: React.FC = () => {
 
   useEffect(() => { document.documentElement.classList.toggle('dark', theme === 'dark'); }, [theme]);
 
-  // Handle Music State
   useEffect(() => {
       if (playingTrack) {
           setIsMusicPlaying(true);
-          setPlayerError(false); // Reset error on new track
+          setPlayerError(false);
       } else {
           setIsMusicPlaying(false);
       }
@@ -284,8 +284,13 @@ const App: React.FC = () => {
       };
   }, [mode, isLiveConnected, isVideoEnabled, isLivePaused]);
 
-  // --- Strict Session Separation Logic ---
+  // --- Mode Switching with Auto-Disconnect ---
   const handleSwitchMode = (newMode: AppMode) => {
+      // If leaving LIVE mode, disconnect the session
+      if (mode === AppMode.LIVE && newMode !== AppMode.LIVE && isLiveConnected) {
+          endLiveSession();
+      }
+
       setMode(newMode);
       setInput('');
       setAttachment(null);
@@ -294,7 +299,6 @@ const App: React.FC = () => {
       if (newMode === AppMode.CHAT || newMode === AppMode.IMAGE) {
           const targetType = newMode === AppMode.IMAGE ? 'image' : 'chat';
           
-          // Find the most recent session of this type
           const recentSession = sessions
              .filter(s => s.sessionType === targetType)
              .sort((a, b) => b.lastUpdated - a.lastUpdated)[0];
@@ -302,7 +306,6 @@ const App: React.FC = () => {
           if (recentSession) {
               setCurrentSessionId(recentSession.id);
           } else {
-              // Create new if none exists
               const newSession: ChatSession = { 
                   id: Date.now().toString(), 
                   title: newMode === AppMode.IMAGE ? 'New Image Gen' : 'New Chat', 
@@ -374,7 +377,6 @@ const App: React.FC = () => {
       }
   };
 
-  // --- NEW: Handle PDF Upload in Live Mode (Safe Reconnect Strategy) ---
   const handleLivePdfClick = () => livePdfInputRef.current?.click();
   const handleLivePdfChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
@@ -391,15 +393,13 @@ const App: React.FC = () => {
                    return;
                }
 
-               // Safely update context and hard restart to avoid double voice
                liveCleanupRef.current?.updateContext(extractedText, () => {
                    if (liveCleanupRef.current) {
                        liveCleanupRef.current.disconnect();
-                       liveCleanupRef.current = null; // IMPORTANT: Nullify ref immediately
+                       liveCleanupRef.current = null;
                    }
                    setIsLiveConnected(false);
                    
-                   // Increase delay to ensure socket is fully closed and buffers cleared
                    setTimeout(() => {
                        startLiveSession();
                        alert("PDF Added! Burnit AI has restarted with the new document.");
@@ -433,14 +433,13 @@ const App: React.FC = () => {
         if (mode === AppMode.IMAGE) {
             const result = await geminiService.generateOrEditImage(newMessage.text, attachData);
             
-            // Handle both success (URL) and failure (Text Error)
             const botMsg: ChatMessage = { 
                 id: (Date.now() + 1).toString(), 
                 role: 'model', 
                 text: result.text || (result.url ? "Here is your creation 🔥" : "Failed to generate image."), 
                 image: result.url || undefined, 
                 timestamp: Date.now(), 
-                type: result.url ? 'image_generated' : 'text' // Fallback to text if no image
+                type: result.url ? 'image_generated' : 'text' 
             };
             updateCurrentSession([...updatedMessages, botMsg]);
         } else {
@@ -466,9 +465,6 @@ const App: React.FC = () => {
           timestamp: Date.now(), 
           type: 'text'
       };
-      // We need to fetch latest messages again since state might have changed, but usually OK in this scope
-      // Ideally use functional update, but simple here.
-      // updateCurrentSession([...messages, newMessage, errorMsg]); // Slightly risky if rapid typing
     } finally {
       setIsLoading(false);
     }
@@ -476,7 +472,6 @@ const App: React.FC = () => {
 
   const startLiveSession = async () => {
     try {
-        // Extract recent history (last 15 messages)
         const historyContext = messages.slice(-15).map(m => {
             const role = m.role === 'user' ? 'User' : 'Burnit AI';
             return `${role}: ${m.text}`;
@@ -484,7 +479,7 @@ const App: React.FC = () => {
 
         await navigator.mediaDevices.getUserMedia({ audio: true }); 
         const controls = await geminiService.connectLive(
-            historyContext, // Pass history here
+            historyContext, 
             (buffer) => {}, 
             () => {
                 setIsLiveConnected(false); setIsVideoEnabled(false); setIsMicMuted(false);
@@ -494,10 +489,12 @@ const App: React.FC = () => {
             (speaking) => setIsAiSpeaking(speaking),
             (volume) => setUserVolume(volume),
             (trackQuery) => setPlayingTrack(trackQuery),
-            // NEW: Handle Live Transcripts to save Memory
             (text, role) => {
+                // Use Ref to access the latest session ID
+                const targetSessionId = currentSessionIdRef.current;
+                
                 setSessions(prev => prev.map(session => {
-                    if (session.id === currentSessionId) {
+                    if (session.id === targetSessionId) {
                         const newMsg: ChatMessage = {
                             id: Date.now().toString(),
                             role: role,
@@ -593,7 +590,20 @@ const App: React.FC = () => {
           if (user) {
               localStorage.removeItem(`burnit_sessions_${user.uid}`);
           }
-          createNewChat(); 
+          
+          // Forcefully reset sessions state to a single empty chat
+          const newSession: ChatSession = { 
+              id: Date.now().toString(), 
+              title: 'New Chat', 
+              messages: [], 
+              lastUpdated: Date.now(),
+              sessionType: 'chat'
+          };
+          
+          setSessions([newSession]);
+          setCurrentSessionId(newSession.id);
+          setMode(AppMode.CHAT);
+          
           alert("Cleared Chat History!");
       }
   };
@@ -680,11 +690,11 @@ const App: React.FC = () => {
            </div>
         </div>
         <div className="p-5 flex flex-col gap-2 shrink-0 border-t border-gray-200 dark:border-white/10 mt-auto bg-gray-50/50 dark:bg-black/20">
-           <button type="button" onClick={() => { setMode(AppMode.PROFILE); setIsSidebarOpen(false); }} className={`flex items-center justify-start gap-3 p-3 rounded-xl transition-all ${mode === AppMode.PROFILE ? 'bg-black/10 dark:bg-white/10 text-black dark:text-white' : 'hover:bg-black/5 dark:hover:bg-white/5 text-gray-500 dark:text-gray-400'}`}>
+           <button type="button" onClick={() => { handleSwitchMode(AppMode.PROFILE); }} className={`flex items-center justify-start gap-3 p-3 rounded-xl transition-all ${mode === AppMode.PROFILE ? 'bg-black/10 dark:bg-white/10 text-black dark:text-white' : 'hover:bg-black/5 dark:hover:bg-white/5 text-gray-500 dark:text-gray-400'}`}>
               <img src={user.photoURL || PLACEHOLDER_AVATAR} alt="User" className="w-9 h-9 rounded-full border border-gray-300 dark:border-white/20 object-cover" />
                <div className="flex flex-col items-start overflow-hidden"><span className="text-sm font-bold truncate w-full">{user.displayName || 'User'}</span><span className="text-xs text-gray-500">Edit Profile</span></div>
            </button>
-           <button type="button" onClick={() => { setMode(AppMode.SETTINGS); setIsSidebarOpen(false); }} className={`flex items-center justify-start gap-3 p-3 rounded-xl transition-all ${mode === AppMode.SETTINGS ? 'bg-black/10 dark:bg-white/10 text-black dark:text-white' : 'hover:bg-black/5 dark:hover:bg-white/5 text-gray-500 dark:text-gray-400'}`}>
+           <button type="button" onClick={() => { handleSwitchMode(AppMode.SETTINGS); }} className={`flex items-center justify-start gap-3 p-3 rounded-xl transition-all ${mode === AppMode.SETTINGS ? 'bg-black/10 dark:bg-white/10 text-black dark:text-white' : 'hover:bg-black/5 dark:hover:bg-white/5 text-gray-500 dark:text-gray-400'}`}>
               <Settings size={20} /><span className="font-medium">Settings</span>
            </button>
         </div>
@@ -746,7 +756,7 @@ const App: React.FC = () => {
                    <button type="button" onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="p-2 text-burnit-red"><Menu size={24} /></button>
                    <h2 className="text-xl font-display font-bold text-black dark:text-white">Edit Profile</h2>
                    <div className="ml-auto">
-                       <button type="button" onClick={() => setMode(AppMode.CHAT)} className="text-sm text-burnit-cyan hover:underline">Back to Chat</button>
+                       <button type="button" onClick={() => handleSwitchMode(AppMode.CHAT)} className="text-sm text-burnit-cyan hover:underline">Back to Chat</button>
                    </div>
               </div>
               <div className="flex-1 overflow-y-auto p-4 md:p-10 pb-24 min-h-0">
@@ -905,7 +915,7 @@ const App: React.FC = () => {
             </div>
             <div className="flex items-center gap-4">
               <select value={language} onChange={(e) => setLanguage(e.target.value)} className="bg-gray-100 dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-lg px-2 py-1 text-sm outline-none focus:border-burnit-cyan max-w-[100px] md:max-w-none text-black dark:text-white">
-                {SUPPORTED_LANGUAGES.map(l => <option key={l.code} value={l.name} className="bg-white dark:bg-black text-black dark:text-white">{l.name}</option>)}
+                {SUPPORTED_LANGUAGES.map(l => <option key={l.code} value={l.name} className="bg-white dark:bg-black text-black dark:text-white">{l.name}</option>))}
               </select>
             </div>
           </header>
