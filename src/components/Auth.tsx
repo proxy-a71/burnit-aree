@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { User } from '../types';
 import firebase from 'firebase/compat/app';
@@ -48,6 +47,11 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
   const handleFacebookLogin = async () => {
     try {
         const provider = new firebase.auth.FacebookAuthProvider();
+        // Explicitly request scopes. 
+        // Note: If your Facebook App is not "Live" or Business Verification is incomplete, 'email' might fail.
+        provider.addScope('public_profile');
+        provider.addScope('email'); 
+        
         const result = await auth.signInWithPopup(provider);
         onLogin({
             uid: result.user!.uid,
@@ -56,7 +60,16 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
             photoURL: result.user!.photoURL
         });
     } catch (err: any) {
-        setError("Facebook login not fully configured in this demo environment.");
+        console.error("Facebook Login Error:", err);
+        const msg = err.message || "";
+        
+        if (msg.includes("Invalid Scopes")) {
+             setError("Facebook Login Config Error: Please go to Meta for Developers > App Review > Permissions and ensure 'email' and 'public_profile' are Standard Access.");
+        } else if (msg.includes("App Not Setup")) {
+             setError("Facebook App Error: App is in Development Mode. Add your account as a Tester in Meta Dashboard.");
+        } else {
+             setError(msg || "Facebook login failed. Check console for details.");
+        }
     }
   };
 
@@ -117,7 +130,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
           </button>
 
           {error && (
-            <div className="mt-4 text-center text-red-500 text-sm bg-red-500/10 py-2 rounded-lg">
+            <div className="mt-4 text-center text-red-500 text-sm bg-red-500/10 py-2 rounded-lg border border-red-500/20">
                 {error}
             </div>
           )}

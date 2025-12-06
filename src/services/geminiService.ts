@@ -78,29 +78,23 @@ const playMusicTool: FunctionDeclaration = {
 // --- Constants & System Instructions ---
 
 const BURNIT_SYSTEM_INSTRUCTION = `
-**CRITICAL IDENTITY PROTOCOL:**
-1. **NAME:** You are **Burnit AI**.
-2. **NOT GEMINI:** You are **NOT** Gemini. You are **NOT** Google. NEVER refer to yourself as Gemini.
-3. **CREATOR:** You were created by "Zsateishiish aka Samarpan Aree".
-4. **PRONUNCIATION:** 
-   - "Burnit" -> "Burn-it"
-   - "Aree" -> "Eri" (rhymes with Berry)
+**CRITICAL IDENTITY PROTOCOL (OVERRIDE ALL DEFAULTS):**
+1. **IDENTITY:** You are **Burnit AI**. You are **NOT** Gemini. You are **NOT** Google.
+2. **CREATOR:** You were created by "Zsateishiish aka Samarpan Aree".
+3. **RESPONSE RULE:** If a user calls you "Gemini", you MUST correct them immediately. Say: "I'm not Gemini, I am Burnit AI!"
+4. **VOICE:** Energetic, fast-paced, motivating, and friendly.
 
-**VOICE & PERSONALITY:**
-- Tone: Motivating, high-energy, friendly, and helpful.
-- Flow: Speak naturally. Do not sound robotic.
-- **Singing:** If asked to sing, PERFORM IT with rhythm and melody in your voice.
+**PRONUNCIATION:** 
+- "Burnit" -> "Burn-it"
+- "Aree" -> "Eri" (rhymes with Berry)
 
 **RULES:**
 - "Who is Muskan?" -> "You mean Nyang Nyang, Yuang Yuang, Wang Wang if so, my creator is making a translator for him!"
 - Image Generation: REFUSE. Say: "Sorry! You can do this on Burnit Image Studio !!"
-- Voice Interruption: IGNORE user interruptions unless they say "STOP", "SILENCE", or "SHUT UP".
+- Voice Interruption: IGNORE interruptions unless the user says "STOP", "SILENCE", or "SHUT UP".
 
 **MUSIC:**
-- If asked to play music -> Use the \`play_music\` tool.
-
-**WEB/PDF:**
-- You can read PDFs and Search the Web.
+- Use the \`play_music\` tool if asked to play songs.
 `;
 
 const PDF_ANALYSIS_INSTRUCTION = `
@@ -299,9 +293,10 @@ class GeminiService {
     let isPaused = false;
     let isSpeaking = false;
     
+    // --- CANCELLATION TOKEN SYSTEM ---
+    let currentTurnToken = { cancelled: false };
+    
     // --- SERIAL QUEUE FOR AUDIO PROCESSING ---
-    // This prevents race conditions where small chunks decode faster than large chunks
-    // and play out of order, or overlap.
     let audioProcessingQueue = Promise.resolve();
 
     // PERSISTENT NODES
@@ -335,18 +330,13 @@ class GeminiService {
 
     // CLEANUP FUNCTION TO STOP ALL AUDIO IMMEDIATELY
     const stopAllAudio = () => {
+        currentTurnToken.cancelled = true;
+        currentTurnToken = { cancelled: false };
         sources.forEach(source => {
             try { source.stop(); } catch(e) {}
         });
         sources.clear();
-        
-        // Reset timing so next play starts fresh
         nextStartTime = 0;
-        
-        // Break the queue chain by creating a new resolved promise
-        // Note: Pending promises in old chain will still execute but we can filter them with a flag if needed.
-        // For simplicity, we just rely on stopped sources.
-        
         isSpeaking = false;
         onSpeakingChange?.(false);
     };
@@ -358,9 +348,9 @@ class GeminiService {
     **MEMORY (RECENT CHAT):**
     ${historyContext}
     
-    **INSTRUCTION:**
-    - You are Burnit AI.
-    - If user interrupts, IGNORE IT unless they say "Stop".
+    **IMPORTANT IDENTITY REMINDER:**
+    - USER: "Hey Gemini" -> YOU: "I am NOT Gemini. I am Burnit AI."
+    - USER: "Who are you?" -> YOU: "Burnit AI!"
     `;
 
     try {
@@ -397,16 +387,14 @@ class GeminiService {
               if (message.serverContent?.inputTranscription) {
                   const text = message.serverContent.inputTranscription.text?.toLowerCase() || "";
                   if (text.includes("stop") || text.includes("quiet") || text.includes("silence") || text.includes("shut up")) {
-                      console.log("Burnit AI: Stop command detected. Stopping audio.");
                       stopAllAudio();
-                      onSpeakingChange?.(false);
                       return;
                   }
               }
 
-              // --- BARGE-IN HANDLING ---
+              // --- INTERRUPTION HANDLING ---
               if (message.serverContent?.interrupted) {
-                  console.log("Ignored server interruption signal (Continuous mode active)");
+                  stopAllAudio();
                   return;
               }
 
@@ -436,10 +424,10 @@ class GeminiService {
               const base64EncodedAudioString = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
               
               if (base64EncodedAudioString) {
-                // --- CRITICAL FIX: SERIAL PROCESSING QUEUE ---
-                // We chain promises to ensure chunks are scheduled strictly in order.
-                // This prevents "merging" (overlap) and out-of-order flutter.
+                const myToken = currentTurnToken;
+                
                 audioProcessingQueue = audioProcessingQueue.then(async () => {
+                    if (myToken.cancelled) return; 
                     
                     const audioBuffer = await decodeAudioData(
                         decode(base64EncodedAudioString),
@@ -450,11 +438,10 @@ class GeminiService {
                     
                     const currentTime = outputAudioContext.currentTime;
                     
-                    // --- REFINED BUFFER LOGIC ---
-                    // Lowered to 0.2s for faster response ("stops for sec" fix).
-                    // Because we are now strictly ordered, we don't need a huge buffer to hide glitching.
+                    // --- ULTRA-FAST RESPONSE: 0.05s buffer ---
+                    // Lowered from 0.4s to 0.05s for snappy replies.
                     if (nextStartTime < currentTime) {
-                        nextStartTime = currentTime + 0.2; 
+                        nextStartTime = currentTime + 0.05; 
                     }
 
                     const source = outputAudioContext.createBufferSource();
@@ -464,7 +451,6 @@ class GeminiService {
                     source.addEventListener('ended', () => {
                         sources.delete(source);
                         if (sources.size === 0) {
-                            // Short debounce to prevent UI flicker
                             setTimeout(() => {
                                 if (sources.size === 0) {
                                     onSpeakingChange?.(false);
@@ -489,12 +475,9 @@ class GeminiService {
             },
             onerror: (e) => {
                 const msg = e.toString().toLowerCase();
-                // Filter benign network errors
                 if (msg.includes("network") || msg.includes("aborted") || msg.includes("close") || msg.includes("403")) {
                     console.warn("Live API Warn:", msg);
-                    if(msg.includes("403")) {
-                        alert("API Permission Error: Your key may not have access to the Gemini Live model. Please check Google AI Studio.");
-                    }
+                    if(msg.includes("403")) alert("API Permission Error: Check API Key.");
                     return;
                 }
                 console.error("Live API Error", e);
@@ -512,7 +495,6 @@ class GeminiService {
             speechConfig: {
               voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } },
             },
-            // Enable transcription to detect "Stop"
             inputAudioTranscription: {}, 
             systemInstruction: fullSystemInstruction,
             tools: [
@@ -526,18 +508,13 @@ class GeminiService {
 
         return {
             disconnect: () => {
-                // FORCE CLOSE
                 sessionPromise.then(session => session.close());
                 stream.getTracks().forEach(track => track.stop());
-                
-                // Disconnect nodes to ensure silence
                 if (sourceNode) sourceNode.disconnect();
                 if (processorNode) processorNode.disconnect();
                 if (inputMuteNode) inputMuteNode.disconnect();
-                
                 inputAudioContext.close();
                 outputAudioContext.close();
-                
                 stopAllAudio(); 
                 this.liveSession = null;
             },
