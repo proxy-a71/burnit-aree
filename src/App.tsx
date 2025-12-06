@@ -881,7 +881,11 @@ const App: React.FC = () => {
               <input type="text" value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()} placeholder={mode === AppMode.IMAGE ? (attachment ? "Describe how to EDIT this image..." : "Describe an image to GENERATE...") : "Ask Burnit AI anything..."} className="flex-1 bg-transparent text-black dark:text-white placeholder-gray-500 outline-none px-2 min-w-0" />
               <button type="button" onClick={handleSendMessage} disabled={isLoading || (!input.trim() && !attachment)} style={{ background: (input.trim() || attachment) ? (mode === AppMode.IMAGE ? 'linear-gradient(to right, #a855f7, #ec4899)' : 'linear-gradient(to right, #00f0ff, #ff2a2a)') : '#4B5563', opacity: (input.trim() || attachment) ? 1 : 1, cursor: (input.trim() || attachment) ? 'pointer' : 'default' }} className={`p-3 rounded-xl transition-all text-white hover:scale-105 active:scale-95`}>{mode === AppMode.IMAGE ? <Wand2 size={20} fill={(input.trim() || attachment) ? "currentColor" : "none"} /> : <Send size={20} fill={(input.trim() || attachment) ? "currentColor" : "none"} />}</button>
             </div>
-            <div className="text-center mt-2"><p className="text-[10px] text-gray-500 dark:text-gray-600">Burnit AI can make mistakes. Consider checking important information.</p></div>
+            <div className="text-center mt-2">
+                <p className="text-[10px] text-gray-500 dark:text-gray-600">
+                    Burnit AI can make mistakes. Consider checking <a href="https://www.privacypolicies.com/live/95600c6c-74dc-4b93-a01f-f0e53051d2ec" target="_blank" rel="noopener noreferrer" className="underline hover:text-burnit-cyan transition-colors">Important Information</a>.
+                </p>
+            </div>
           </div>
         </div>
       )}
