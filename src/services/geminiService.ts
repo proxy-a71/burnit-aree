@@ -198,7 +198,7 @@ class GeminiService {
     }
   }
 
-  // 2. Image Generation & Editing
+  // 2. Image Generation & Editing (Updated with Robustness)
   async generateOrEditImage(
       prompt: string, 
       attachment?: { mimeType: string; data: string } | null
@@ -223,21 +223,35 @@ class GeminiService {
         let imageUrl = null;
         let textOutput = "";
 
-        if (response.candidates?.[0]?.content?.parts) {
-            for (const part of response.candidates[0].content.parts) {
-                if (part.inlineData) {
-                    const base64EncodeString = part.inlineData.data;
-                    imageUrl = `data:image/png;base64,${base64EncodeString}`;
-                } else if (part.text) {
-                    textOutput = part.text;
+        if (response.candidates && response.candidates.length > 0) {
+            const candidate = response.candidates[0];
+
+            // Check Finish Reason for refusals/safety filters
+            if (candidate.finishReason !== 'STOP') {
+                 // Return the reason as text instead of failing silently
+                 textOutput = `Image generation stopped. The model refused the request. Reason: ${candidate.finishReason}`;
+            }
+
+            if (candidate.content?.parts) {
+                for (const part of candidate.content.parts) {
+                    if (part.inlineData) {
+                        const base64EncodeString = part.inlineData.data;
+                        imageUrl = `data:image/png;base64,${base64EncodeString}`;
+                    } else if (part.text) {
+                        textOutput = part.text;
+                    }
                 }
             }
+        } else {
+             textOutput = "No image generated. The prompt might be too complex or violated safety guidelines.";
         }
+        
         return { url: imageUrl, text: sanitizeResponse(textOutput) };
 
-     } catch (error) {
+     } catch (error: any) {
         console.error("Gemini Image Gen/Edit Error:", error);
-        throw error;
+        // Safely return error message instead of crashing
+        return { url: null, text: `Error generating image: ${error.message || "Unknown error"}` };
      }
   }
 

@@ -6,7 +6,7 @@ import {
   Flame, MessageSquare, Mic, Image as ImageIcon, 
   Send, Paperclip, Settings, LogOut, Moon, Sun, X, MicOff,
   User as UserIcon, Calendar, MapPin, Camera, Video, ChevronLeft, ChevronRight, Upload, PhoneOff, VideoOff, Play, Key, Globe, File as FileIcon, Plus, MessageCircle, Menu, Link as LinkIcon, Wand2,
-  Pause, PlayCircle, Music, Disc, SkipForward, Volume2, ExternalLink, Speaker
+  Pause, PlayCircle, Music, Disc, SkipForward, Volume2, ExternalLink, Speaker, Copy, Check, Download
 } from 'lucide-react';
 import { PLACEHOLDER_AVATAR, BURNIT_LOGO_URL } from './constants';
 import ReactMarkdown from 'react-markdown';
@@ -17,6 +17,50 @@ import remarkGfm from 'remark-gfm';
 const CONTINENTS = [
   "Asia", "Africa", "North America", "South America", "Antarctica", "Europe", "Australia", "Other"
 ];
+
+// --- Sub-components for Markdown Rendering ---
+
+const CodeBlock = ({ inline, className, children, ...props }: any) => {
+  const [isCopied, setIsCopied] = useState(false);
+  const match = /language-(\w+)/.exec(className || '');
+  const codeText = String(children).replace(/\n$/, '');
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(codeText);
+    setIsCopied(true);
+    setTimeout(() => setIsCopied(false), 2000);
+  };
+
+  if (!inline && match) {
+    return (
+      <div className="relative my-4 rounded-xl overflow-hidden border border-gray-700 bg-[#1f2937] shadow-lg group">
+        <div className="flex items-center justify-between px-4 py-2 bg-[#111827] border-b border-gray-700">
+          <span className="text-xs text-gray-400 font-mono font-bold uppercase">{match[1]}</span>
+          <button 
+            onClick={handleCopy} 
+            className="flex items-center gap-1.5 text-xs font-medium text-gray-400 hover:text-white transition-colors bg-white/5 hover:bg-white/10 px-2 py-1 rounded-md"
+          >
+            {isCopied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
+            {isCopied ? 'Copied!' : 'Copy Code'}
+          </button>
+        </div>
+        <div className="p-4 overflow-x-auto">
+          <code className={`${className} !bg-transparent !p-0 !text-sm`} {...props}>
+            {children}
+          </code>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <code className={className} {...props}>
+      {children}
+    </code>
+  );
+};
+
+const PreBlock = ({ children }: any) => <>{children}</>;
 
 const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
@@ -98,12 +142,28 @@ const App: React.FC = () => {
     }
   }, [user]);
 
+  // --- LOAD SESSIONS (User Specific) ---
   useEffect(() => {
-    const savedSessions = localStorage.getItem('burnit_sessions');
+    if (!user) return; // Wait for user login
+
+    const userSessionKey = `burnit_sessions_${user.uid}`;
+    const savedSessions = localStorage.getItem(userSessionKey);
+    const legacyGlobalSessions = localStorage.getItem('burnit_sessions'); // Fallback/Migration
+
     let loadedSessions: ChatSession[] = [];
+
     if (savedSessions) {
-        try { loadedSessions = JSON.parse(savedSessions); } catch (e) {}
+        try {
+            loadedSessions = JSON.parse(savedSessions);
+        } catch (e) { console.error("Error parsing user sessions", e); }
+    } else if (legacyGlobalSessions) {
+        // Migration: If no specific data exists, try global
+        try {
+            loadedSessions = JSON.parse(legacyGlobalSessions);
+        } catch (e) { console.error("Error migrating history", e); }
     }
+
+    // Ensure sessionType exists
     loadedSessions = loadedSessions.map(s => ({
         ...s,
         sessionType: s.sessionType || 'chat' 
@@ -119,9 +179,13 @@ const App: React.FC = () => {
         };
         loadedSessions = [initialSession];
     }
+
     setSessions(loadedSessions);
-    if (loadedSessions.length > 0) setCurrentSessionId(loadedSessions[0].id);
-  }, []);
+    // Set current session to the most recent one of the default type
+    if (loadedSessions.length > 0) {
+        setCurrentSessionId(loadedSessions[0].id);
+    }
+  }, [user]); // Re-run when user changes
 
   const handleLogin = (loggedInUser: User) => {
       let storedProfile: Partial<User> = {};
@@ -149,15 +213,16 @@ const App: React.FC = () => {
       });
   };
 
+  // --- SAVE SESSIONS (User Specific) ---
   useEffect(() => { 
-      if (sessions.length > 0) {
+      if (user && sessions.length > 0) {
           try {
-              localStorage.setItem('burnit_sessions', JSON.stringify(sessions));
+              localStorage.setItem(`burnit_sessions_${user.uid}`, JSON.stringify(sessions));
           } catch (e) {
               console.error("Storage limit reached.", e);
           }
       }
-  }, [sessions]);
+  }, [sessions, user]);
   
   useEffect(() => { 
       if (chatContainerRef.current) {
@@ -367,17 +432,17 @@ const App: React.FC = () => {
 
         if (mode === AppMode.IMAGE) {
             const result = await geminiService.generateOrEditImage(newMessage.text, attachData);
-            if (result.url) {
-                const botMsg: ChatMessage = { 
+            
+            // Handle both success (URL) and failure (Text Error)
+            const botMsg: ChatMessage = { 
                 id: (Date.now() + 1).toString(), 
                 role: 'model', 
-                text: result.text || "Here is your creation 🔥", 
-                image: result.url, 
+                text: result.text || (result.url ? "Here is your creation 🔥" : "Failed to generate image."), 
+                image: result.url || undefined, 
                 timestamp: Date.now(), 
-                type: 'image_generated' 
-                };
-                updateCurrentSession([...updatedMessages, botMsg]);
-            }
+                type: result.url ? 'image_generated' : 'text' // Fallback to text if no image
+            };
+            updateCurrentSession([...updatedMessages, botMsg]);
         } else {
             const historyForApi = updatedMessages.map(m => ({ role: m.role, parts: [{ text: m.text }] }));
             const response = await geminiService.sendMessage(historyForApi, newMessage.text, attachData, language);
@@ -394,6 +459,16 @@ const App: React.FC = () => {
         }
     } catch (error: any) {
       console.error("Message handling error:", error);
+      const errorMsg: ChatMessage = { 
+          id: (Date.now() + 1).toString(), 
+          role: 'model', 
+          text: "An error occurred. Please try again.", 
+          timestamp: Date.now(), 
+          type: 'text'
+      };
+      // We need to fetch latest messages again since state might have changed, but usually OK in this scope
+      // Ideally use functional update, but simple here.
+      // updateCurrentSession([...messages, newMessage, errorMsg]); // Slightly risky if rapid typing
     } finally {
       setIsLoading(false);
     }
@@ -515,7 +590,9 @@ const App: React.FC = () => {
   
   const handleClearHistory = () => {
       if (window.confirm("Are you sure you want to delete all chat history?")) {
-          localStorage.removeItem('burnit_sessions');
+          if (user) {
+              localStorage.removeItem(`burnit_sessions_${user.uid}`);
+          }
           createNewChat(); 
           alert("Cleared Chat History!");
       }
@@ -847,11 +924,36 @@ const App: React.FC = () => {
                 {msg.role === 'model' && <div className="shrink-0 flex flex-col items-center gap-1"><img src={BURNIT_LOGO_URL} alt="AI" className="w-10 h-10 rounded-full border border-burnit-cyan object-cover animate-flame" onError={(e) => e.currentTarget.src = PLACEHOLDER_AVATAR} /><span className="text-[10px] text-burnit-cyan font-bold tracking-widest">BURNIT</span></div>}
                 <div className={`max-w-[85%] md:max-w-[70%] p-4 rounded-2xl ${msg.role === 'user' ? 'bg-white text-black dark:bg-white dark:text-black rounded-tr-none shadow-md' : 'bg-white/80 dark:bg-white/5 border-l-4 border-l-burnit-cyan text-black dark:text-gray-100 rounded-tl-none shadow-sm'}`}>
                   {msg.image && msg.type !== 'image_generated' && <div className="mb-2"><img src={msg.image} className="max-h-60 rounded-lg border border-gray-200 dark:border-white/10" alt="Attachment" /></div>}
-                  {msg.type === 'image_generated' && msg.image ? <div className="space-y-3"><img src={msg.image} alt="Generated" className="rounded-xl w-full" /><p>{msg.text}</p></div> : 
-                    <div className="leading-relaxed overflow-x-auto max-w-full">
-                        <ReactMarkdown className={`prose max-w-none break-words ${msg.role === 'model' ? 'dark:prose-invert' : ''}`} remarkPlugins={[remarkMath, remarkGfm]} rehypePlugins={[rehypeKatex]}>{msg.text}</ReactMarkdown>
+                  {msg.type === 'image_generated' && msg.image ? (
+                    <div className="space-y-3 relative group">
+                        <div className="relative overflow-hidden rounded-xl">
+                            <img src={msg.image} alt="Generated" className="w-full object-cover" />
+                            <a 
+                                href={msg.image} 
+                                download={`burnit-ai-${Date.now()}.png`}
+                                className="absolute top-2 right-2 p-2 bg-black/60 hover:bg-black/80 text-white rounded-full opacity-0 group-hover:opacity-100 transition-all backdrop-blur-md transform hover:scale-110 shadow-lg"
+                                title="Download Image"
+                            >
+                                <Download size={20} />
+                            </a>
+                        </div>
+                        <p>{msg.text}</p>
                     </div>
-                  }
+                  ) : (
+                    <div className="leading-relaxed overflow-x-auto max-w-full">
+                        <ReactMarkdown 
+                            className={`prose max-w-none break-words ${msg.role === 'model' ? 'dark:prose-invert' : ''}`} 
+                            remarkPlugins={[remarkMath, remarkGfm]} 
+                            rehypePlugins={[rehypeKatex]}
+                            components={{
+                                pre: PreBlock,
+                                code: CodeBlock
+                            }}
+                        >
+                            {msg.text}
+                        </ReactMarkdown>
+                    </div>
+                  )}
                   {msg.groundingMetadata?.groundingChunks && (
                       <div className="mt-3 pt-3 border-t border-black/10 dark:border-white/10 flex flex-wrap gap-2">
                         {msg.groundingMetadata.groundingChunks.map((chunk: any, i: number) => {
