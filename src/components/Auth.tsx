@@ -47,10 +47,12 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
   const handleFacebookLogin = async () => {
     try {
         const provider = new firebase.auth.FacebookAuthProvider();
-        // Explicitly request scopes. 
-        // Note: If your Facebook App is not "Live" or Business Verification is incomplete, 'email' might fail.
+        
+        // Facebook Permissions
+        // 'email' is required to get the user's email address.
+        // 'public_profile' is default but good to specify.
+        provider.addScope('email');
         provider.addScope('public_profile');
-        provider.addScope('email'); 
         
         const result = await auth.signInWithPopup(provider);
         onLogin({
@@ -63,12 +65,13 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
         console.error("Facebook Login Error:", err);
         const msg = err.message || "";
         
-        if (msg.includes("Invalid Scopes")) {
-             setError("Facebook Login Config Error: Please go to Meta for Developers > App Review > Permissions and ensure 'email' and 'public_profile' are Standard Access.");
-        } else if (msg.includes("App Not Setup")) {
-             setError("Facebook App Error: App is in Development Mode. Add your account as a Tester in Meta Dashboard.");
+        // Specific error handling for developer/configuration issues
+        if (msg.includes("Invalid Scopes") || msg.includes("email")) {
+             setError("FB Config Error: Your Facebook App on Meta Developers does not allow requesting 'email'. Go to App Review > Permissions and add 'email' access.");
+        } else if (msg.includes("App Not Setup") || msg.includes("mode")) {
+             setError("FB App Error: App is in Development Mode. Please add your Facebook account as a Tester in the Meta Dashboard.");
         } else {
-             setError(msg || "Facebook login failed. Check console for details.");
+             setError(msg || "Facebook login failed. Please check your internet connection.");
         }
     }
   };
@@ -130,7 +133,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
           </button>
 
           {error && (
-            <div className="mt-4 text-center text-red-500 text-sm bg-red-500/10 py-2 rounded-lg border border-red-500/20">
+            <div className="mt-4 text-center text-red-500 text-sm bg-red-500/10 py-2 rounded-lg border border-red-500/20 px-2">
                 {error}
             </div>
           )}

@@ -812,7 +812,7 @@ const App: React.FC = () => {
             </div>
             <div className="flex items-center gap-4">
               <select value={language} onChange={(e) => setLanguage(e.target.value)} className="bg-gray-100 dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-lg px-2 py-1 text-sm outline-none focus:border-burnit-cyan max-w-[100px] md:max-w-none text-black dark:text-white">
-                {SUPPORTED_LANGUAGES.map(l => <option key={l.code} value={l.name} className="bg-white dark:bg-black text-black dark:text-white">{l.name}</option>))}
+                {SUPPORTED_LANGUAGES.map(l => <option key={l.code} value={l.name} className="bg-white dark:bg-black text-black dark:text-white">{l.name}</option>)}
               </select>
             </div>
           </header>
